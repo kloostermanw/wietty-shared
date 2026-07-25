@@ -15,6 +15,10 @@ public enum RemoteConnectionState: Equatable, Sendable {
 public final class RemoteWorkspaceStore: ObservableObject {
     public let connection: RemoteConnection
     @Published public private(set) var state: RemoteConnectionState = .connecting
+    /// The last snapshot pushed by the remote. Only meaningful while `state ==
+    /// .connected`: a drop does not clear it, so a disconnected store keeps holding the
+    /// last good snapshot indefinitely. Consumers must gate any UI built from this on
+    /// `state`, or a dead remote's sessions render as live forever.
     @Published public private(set) var workspaces: [RemoteWorkspace] = []
     /// Set when the most recent action POST failed (non 2xx, or a transport error);
     /// cleared as soon as an action succeeds.
