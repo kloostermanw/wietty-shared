@@ -43,6 +43,28 @@ import Foundation
         #expect(s.state == .connected)
     }
 
+    // MARK: - Unbuildable URLs
+    //
+    // `connect()` runs synchronously inside `start()`, so these are testable with no
+    // socket and no network: a host containing a space, and a negative port, both make
+    // `URL(string:)` return nil on this toolchain (verified directly, not assumed).
+
+    @Test func aHostThatCannotBuildAURLGoesStraightToUnreachable() {
+        let s = RemoteWorkspaceStore(
+            connection: RemoteConnection(id: UUID(), name: "B", host: "not a host", port: 1, token: "t")
+        )
+        s.start()
+        #expect(s.state == .unreachable)
+    }
+
+    @Test func aPortThatCannotBuildAURLGoesStraightToUnreachable() {
+        let s = RemoteWorkspaceStore(
+            connection: RemoteConnection(id: UUID(), name: "B", host: "127.0.0.1", port: -1, token: "t")
+        )
+        s.start()
+        #expect(s.state == .unreachable)
+    }
+
     // MARK: - Auth classification
     //
     // The status here is that of `GET /api/workspaces`, not of the WebSocket upgrade.

@@ -15,6 +15,10 @@ public enum RemoteConnectionState: Equatable, Sendable {
 public final class RemoteWorkspaceStore: ObservableObject {
     public let connection: RemoteConnection
     @Published public private(set) var state: RemoteConnectionState = .connecting
+    /// The last snapshot pushed by the remote. Only meaningful while `state ==
+    /// .connected`: a drop does not clear it, so a disconnected store keeps holding the
+    /// last good snapshot indefinitely. Consumers must gate any UI built from this on
+    /// `state`, or a dead remote's sessions render as live forever.
     @Published public private(set) var workspaces: [RemoteWorkspace] = []
     /// Set when the most recent action POST failed (non 2xx, or a transport error);
     /// cleared as soon as an action succeeds.
@@ -58,7 +62,15 @@ public final class RemoteWorkspaceStore: ObservableObject {
         reconnectTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
-        guard running, let url = endpoints.control else { return }
+        guard running else { return }
+        // A URL that cannot be built (an unparseable host, or a port outside the valid
+        // range) is a permanent condition, not a transient one: nothing about retrying
+        // will make the string parse. Report it as `.unreachable` to match how
+        // `probeStatus(url:)` already classifies a nil URL, rather than leaving the
+        // store stuck at its initial `.connecting` forever with no way to recover short
+        // of deleting and re-adding the connection. No retry is scheduled, because
+        // retrying cannot help.
+        guard let url = endpoints.control else { state = .unreachable; return }
         state = .connecting
         let task = URLSession.shared.webSocketTask(with: url)
         socket = task
@@ -103,6 +115,13 @@ public final class RemoteWorkspaceStore: ObservableObject {
     private func handleDrop() {
         socket = nil
         guard running else { return }
+        // Set before the probe is awaited, not inside the task after it: packets to a
+        // sleeping host are dropped rather than refused, so the probe below can take its
+        // full 5 second timeout. Leaving `state` (and the stale `workspaces`) untouched
+        // for those 5 seconds would render a complete, tappable session list for a
+        // remote that is already gone. `.connecting` is honest immediately, and the
+        // probe refines it to `.unreachable` or `.unauthorized` once it knows more.
+        state = .connecting
         reconnectTask = Task { @MainActor in
             let status = await Self.probeStatus(url: self.endpoints.workspaces)
             guard !Task.isCancelled, self.running else { return }
@@ -117,7 +136,11 @@ public final class RemoteWorkspaceStore: ObservableObject {
         }
     }
 
-    /// The HTTP status of a token gated GET, or nil when the host could not be reached.
+    /// The HTTP status of a token gated GET, or nil when the host could not be reached,
+    /// or when no URL could be built at all (an unparseable host or an out of range
+    /// port). `connect()` classifies that second case the same way, via
+    /// `connectionState(forProbeStatus:)`, so a nil URL means `.unreachable` on both the
+    /// probe path and the connect path.
     private nonisolated static func probeStatus(url: URL?) async -> Int? {
         guard let url else { return nil }
         var request = URLRequest(url: url)
@@ -153,7 +176,14 @@ public final class RemoteWorkspaceStore: ObservableObject {
     }
 
     private func post(_ url: URL?) {
-        guard let url else { return }
+        guard let url else {
+            // No URL could be built (an unparseable host, or an out of range port).
+            // Reuses the transport-failure message so the wording is consistent with
+            // the case this is indistinguishable from to the user: either way, the
+            // action did not reach the remote.
+            lastActionError = Self.actionErrorMessage(status: nil, hadTransportError: true)
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
