@@ -58,7 +58,15 @@ public final class RemoteWorkspaceStore: ObservableObject {
         reconnectTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
-        guard running, let url = endpoints.control else { return }
+        guard running else { return }
+        // A URL that cannot be built (an unparseable host, or a port outside the valid
+        // range) is a permanent condition, not a transient one: nothing about retrying
+        // will make the string parse. Report it as `.unreachable` to match how
+        // `probeStatus(url:)` already classifies a nil URL, rather than leaving the
+        // store stuck at its initial `.connecting` forever with no way to recover short
+        // of deleting and re-adding the connection. No retry is scheduled, because
+        // retrying cannot help.
+        guard let url = endpoints.control else { state = .unreachable; return }
         state = .connecting
         let task = URLSession.shared.webSocketTask(with: url)
         socket = task
@@ -103,6 +111,13 @@ public final class RemoteWorkspaceStore: ObservableObject {
     private func handleDrop() {
         socket = nil
         guard running else { return }
+        // Set before the probe is awaited, not inside the task after it: packets to a
+        // sleeping host are dropped rather than refused, so the probe below can take its
+        // full 5 second timeout. Leaving `state` (and the stale `workspaces`) untouched
+        // for those 5 seconds would render a complete, tappable session list for a
+        // remote that is already gone. `.connecting` is honest immediately, and the
+        // probe refines it to `.unreachable` or `.unauthorized` once it knows more.
+        state = .connecting
         reconnectTask = Task { @MainActor in
             let status = await Self.probeStatus(url: self.endpoints.workspaces)
             guard !Task.isCancelled, self.running else { return }
@@ -117,7 +132,11 @@ public final class RemoteWorkspaceStore: ObservableObject {
         }
     }
 
-    /// The HTTP status of a token gated GET, or nil when the host could not be reached.
+    /// The HTTP status of a token gated GET, or nil when the host could not be reached,
+    /// or when no URL could be built at all (an unparseable host or an out of range
+    /// port). `connect()` classifies that second case the same way, via
+    /// `connectionState(forProbeStatus:)`, so a nil URL means `.unreachable` on both the
+    /// probe path and the connect path.
     private nonisolated static func probeStatus(url: URL?) async -> Int? {
         guard let url else { return nil }
         var request = URLRequest(url: url)
