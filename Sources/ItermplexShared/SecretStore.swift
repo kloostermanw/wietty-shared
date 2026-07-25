@@ -40,18 +40,24 @@ public struct KeychainSecretStore: SecretStore {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Tries the update first and only falls back to add when the Keychain reports the
+    /// item genuinely missing (`errSecItemNotFound`), rather than deciding between the
+    /// two by reading first with `secret(for:)`. That read cannot tell "no such item"
+    /// apart from "the read failed", and on iOS it fails routinely: a generic password
+    /// item defaults to `kSecAttrAccessibleWhenUnlocked`, so `SecItemCopyMatching`
+    /// returns `errSecInteractionNotAllowed` while the device is locked. Read-then-branch
+    /// would treat that as "missing", take the add path, get `errSecDuplicateItem` back,
+    /// swallow it, and leave the old token in place, silently, on a device that most
+    /// users keep locked most of the time.
     public func setSecret(_ value: String, for key: String) {
         guard let data = value.data(using: .utf8) else { return }
         let base = query(for: key)
 
-        if secret(for: key) != nil {
-            let attributes: [String: Any] = [kSecValueData as String: data]
-            SecItemUpdate(base as CFDictionary, attributes as CFDictionary)
-        } else {
-            var addQuery = base
-            addQuery[kSecValueData as String] = data
-            SecItemAdd(addQuery as CFDictionary, nil)
-        }
+        let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        guard status == errSecItemNotFound else { return }
+        var addQuery = base
+        addQuery[kSecValueData as String] = data
+        SecItemAdd(addQuery as CFDictionary, nil)
     }
 
     public func removeSecret(for key: String) {

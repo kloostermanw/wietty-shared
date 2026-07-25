@@ -1,5 +1,13 @@
 import Foundation
 
+/// Why a `RemoteTerminalConnection` stopped.
+public enum TerminalEndReason: Equatable, Sendable {
+    /// The server reported the session is gone. Reconnecting will not bring it back.
+    case sessionEnded
+    /// The socket failed, or no URL could be built. The session may still exist.
+    case connectionLost
+}
+
 /// Bridges one remote session's `WS /attach` stream to a byte feed for a terminal view
 /// and an input sink back to the server.
 ///
@@ -17,8 +25,10 @@ public final class RemoteTerminalConnection {
     public var onData: (([UInt8]) -> Void)?
     /// The remote grid size, as (cols, rows).
     public var onResize: ((Int, Int) -> Void)?
-    /// The session ended, or the socket failed. Terminal in both cases.
-    public var onEnded: (() -> Void)?
+    /// The session ended, or the socket failed, or no URL could be built. Terminal in
+    /// every case, but the reason distinguishes whether reconnecting could plausibly
+    /// help.
+    public var onEnded: ((TerminalEndReason) -> Void)?
 
     public init(connection: RemoteConnection, sessionId: String) {
         self.endpoints = RemoteEndpoints(connection)
@@ -26,7 +36,11 @@ public final class RemoteTerminalConnection {
     }
 
     public func start() {
-        guard !running, let url = endpoints.attach(sessionId: sessionId) else { return }
+        guard !running else { return }
+        guard let url = endpoints.attach(sessionId: sessionId) else {
+            onEnded?(.connectionLost)
+            return
+        }
         running = true
         let task = URLSession.shared.webSocketTask(with: url)
         socket = task
@@ -58,7 +72,7 @@ public final class RemoteTerminalConnection {
                     self.receive(on: task)
                 case .failure:
                     self.stop()
-                    self.onEnded?()
+                    self.onEnded?(.connectionLost)
                 }
             }
         }
@@ -74,7 +88,7 @@ public final class RemoteTerminalConnection {
             onData?(bytes)
         case .ended:
             stop()
-            onEnded?()
+            onEnded?(.sessionEnded)
         case nil:
             break
         }

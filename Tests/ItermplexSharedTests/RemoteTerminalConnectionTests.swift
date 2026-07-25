@@ -36,10 +36,10 @@ import Foundation
 
     @Test func endedMessagesReachTheEndedCallback() {
         let c = connection()
-        var ended = false
-        c.onEnded = { ended = true }
+        var reason: TerminalEndReason?
+        c.onEnded = { reason = $0 }
         c.handle("{\"type\":\"ended\"}")
-        #expect(ended)
+        #expect(reason == .sessionEnded)
     }
 
     @Test func garbageFiresNoCallback() {
@@ -47,7 +47,7 @@ import Foundation
         var fired = false
         c.onData = { _ in fired = true }
         c.onResize = { _, _ in fired = true }
-        c.onEnded = { fired = true }
+        c.onEnded = { _ in fired = true }
         c.handle("not json")
         c.handle("{\"type\":\"who-knows\"}")
         #expect(!fired)
