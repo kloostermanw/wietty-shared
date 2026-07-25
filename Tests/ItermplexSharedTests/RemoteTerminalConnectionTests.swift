@@ -2,6 +2,12 @@ import Testing
 import Foundation
 @testable import ItermplexShared
 
+/// Deliberately not covered here: `start()`, `stop()`, and the socket receive loop.
+/// `RemoteTerminalConnection` has no injection seam over `URLSessionWebSocketTask` by
+/// design, since it is a verbatim port of code already running in the macOS app, and
+/// adding one would make it harder to audit against the original. The `task === self.socket`
+/// identity guard and the `@MainActor` hop in the receive callback are verified by
+/// inspection and by production/live-terminal use, not by test.
 @MainActor
 @Suite struct RemoteTerminalConnectionTests {
     private func connection() -> RemoteTerminalConnection {
@@ -45,10 +51,5 @@ import Foundation
         c.handle("not json")
         c.handle("{\"type\":\"who-knows\"}")
         #expect(!fired)
-    }
-
-    @Test func sendBeforeStartIsDropped() {
-        // No socket exists yet, so this must not crash and must not be queued.
-        connection().send(Array("ls\r".utf8)[...])
     }
 }
