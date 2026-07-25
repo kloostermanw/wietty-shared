@@ -72,6 +72,18 @@ import Foundation
         #expect(workspaces.isEmpty)
     }
 
+    /// A snapshot missing the `workspaces` key entirely is a different situation from
+    /// one that has it present as `[]`: the latter is an instance truthfully reporting
+    /// it has zero workspaces, but the former is missing the field that defines what
+    /// the envelope even is, so it must decode to `nil`, not an empty array. Task 7's
+    /// store relies on `nil` vs `[]` to distinguish "haven't heard from the server" from
+    /// "the server says there's nothing here," and only marks a connection connected in
+    /// the second case. If a future change defaulted `workspaces` to `[]` to be more
+    /// "lenient," this test is what would catch that regression.
+    @Test func aSnapshotMissingTheWorkspacesKeyEntirelyDecodesToNilNotAnEmptyList() {
+        #expect(RemoteSnapshotDecoder.decode(snapshotText: snapshot(["type": "snapshot"])) == nil)
+    }
+
     @Test func aWorkspaceMissingItsIdIsSkipped() throws {
         let good = UUID()
         let text = snapshot(["workspaces": [
