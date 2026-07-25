@@ -172,7 +172,14 @@ public final class RemoteWorkspaceStore: ObservableObject {
     }
 
     private func post(_ url: URL?) {
-        guard let url else { return }
+        guard let url else {
+            // No URL could be built (an unparseable host, or an out of range port).
+            // Reuses the transport-failure message so the wording is consistent with
+            // the case this is indistinguishable from to the user: either way, the
+            // action did not reach the remote.
+            lastActionError = Self.actionErrorMessage(status: nil, hadTransportError: true)
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
