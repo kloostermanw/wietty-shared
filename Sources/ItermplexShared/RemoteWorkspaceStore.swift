@@ -92,7 +92,11 @@ public final class RemoteWorkspaceStore: ObservableObject {
     /// and a broken route are indistinguishable there. The REST route returns a real
     /// 401, which is the only reliable signal that the token is wrong. Anything else,
     /// including no response at all, is a transient failure worth retrying.
-    public static func connectionState(forProbeStatus status: Int?) -> RemoteConnectionState {
+    ///
+    /// `nonisolated` because this is a pure function of its argument, with no
+    /// dependence on actor state, so it carries no isolation of its own and can be
+    /// called from any context, isolated or not.
+    public nonisolated static func connectionState(forProbeStatus status: Int?) -> RemoteConnectionState {
         status == 401 ? .unauthorized : .unreachable
     }
 
@@ -114,7 +118,7 @@ public final class RemoteWorkspaceStore: ObservableObject {
     }
 
     /// The HTTP status of a token gated GET, or nil when the host could not be reached.
-    private static func probeStatus(url: URL?) async -> Int? {
+    private nonisolated static func probeStatus(url: URL?) async -> Int? {
         guard let url else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -136,7 +140,12 @@ public final class RemoteWorkspaceStore: ObservableObject {
 
     /// Pure mapping from a POST outcome to a short, user facing message. `nil` means the
     /// action succeeded.
-    public static func actionErrorMessage(status: Int?, hadTransportError: Bool) -> String? {
+    ///
+    /// `nonisolated` because this is a pure function of its arguments, with no
+    /// dependence on actor state, so it carries no isolation of its own; that is what
+    /// lets it be called from a `URLSession` completion handler, which runs off the
+    /// main actor, and be tested directly without standing up a socket or a server.
+    public nonisolated static func actionErrorMessage(status: Int?, hadTransportError: Bool) -> String? {
         if hadTransportError { return "Action failed: could not reach the remote." }
         guard let status else { return "Action failed: could not reach the remote." }
         guard (200...299).contains(status) else { return "Action failed (\(status))." }
