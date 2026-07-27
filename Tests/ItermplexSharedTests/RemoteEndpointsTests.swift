@@ -45,12 +45,13 @@ import Foundation
     // MARK: - tmux pane ids
 
     // Session ids used to be iTerm2 GUIDs. They are now tmux pane ids like "%12", and "%"
-    // is the percent-encoding escape character: left raw, `%12` is parsed by `URL(string:)`
-    // as an escaped `U+0012` control character rather than the literal pane id, so the
-    // server ends up attaching to no pane at all. These tests pin the fix: the produced URL
-    // must carry the pane id doubly-encoded (`%25` + the original digits) so that a single
-    // percent-decode on the server, which is what Hummingbird's `URI` does for query
-    // values, recovers the exact original string.
+    // is the percent-encoding escape character: left raw in a query value, `%12` is parsed
+    // by `URL(string:)` as an escaped `U+0012` control character rather than the literal
+    // pane id, so the server ends up attaching to no pane at all. These tests pin the fix
+    // for `attach`'s query value: the produced URL must carry the pane id doubly-encoded
+    // (`%25` + the original digits) so that a single percent-decode on the server, which is
+    // what Hummingbird's `URI.queryParameters` does, recovers the exact original string.
+    // `restart`/`close` need the opposite treatment; see the test below for why.
 
     @Test func paneIdWithDoubleDigitsSurvivesRoundTrip() {
         let url = endpoints.attach(sessionId: "%12")
@@ -64,14 +65,18 @@ import Foundation
         #expect(decodedQueryValue(url, name: "session") == "%3")
     }
 
-    @Test func paneIdInSessionActionURLsSurvivesRoundTrip() {
+    // `restart`/`close` put sessionId in a *path* segment, not a query value, and the
+    // server's router never percent-decodes path segments (only `URI.queryParameters`
+    // does). So unlike `attach`, these two must interpolate the pane id raw: encoding it
+    // here with no decode step on the other end would turn `%12` into the literal
+    // string `%2512` server-side, which matches no session. This test pins that the pane
+    // id survives unencoded, not that it round-trips through a decode.
+    @Test func paneIdInSessionActionURLsIsLeftRawForTheUndecodingPathRouter() {
         let restart = endpoints.restart(sessionId: "%12")
-        #expect(restart?.absoluteString == "http://192.168.1.20:7434/api/sessions/%2512/restart?token=tok")
-        #expect(restart?.pathComponents.contains("%12") == true)
+        #expect(restart?.absoluteString == "http://192.168.1.20:7434/api/sessions/%12/restart?token=tok")
 
         let close = endpoints.close(sessionId: "%12")
-        #expect(close?.absoluteString == "http://192.168.1.20:7434/api/sessions/%2512/close?token=tok")
-        #expect(close?.pathComponents.contains("%12") == true)
+        #expect(close?.absoluteString == "http://192.168.1.20:7434/api/sessions/%12/close?token=tok")
     }
 
     @Test func tokenNeedingEncodingSurvivesRoundTrip() {

@@ -6,23 +6,38 @@ import Foundation
 ///
 /// The surrounding shape is still built by string interpolation rather than
 /// `URLComponents`, because `URLComponents` would change the byte-identical URLs the
-/// server matches on. Every *value* interpolated into that shape (`token`, `sessionId`)
-/// is percent-encoded first through `urlSafe(_:)`, so only the value's bytes change, not
-/// the surrounding structure.
+/// server matches on. Every query *value* interpolated into that shape (`token`, and
+/// `sessionId` in `attach`) is percent-encoded first through `queryEncoded(_:)`, so only
+/// the value's bytes change, not the surrounding structure.
 ///
-/// An earlier version of this comment argued no encoding was needed at all: a token is
+/// An earlier version of this comment argued no encoding was needed anywhere: a token is
 /// 32 lowercase hexadecimal characters, and `sessionId` was an iTerm2 GUID, so neither
 /// needed escaping and a stray character would at worst degrade to a clean 401. That
 /// argument depended on `sessionId` staying GUID-shaped, and stopped being true when the
 /// macOS app migrated session identifiers to tmux pane ids such as `%12`. `%` is the
 /// percent-encoding escape character, so `URL(string:)` parsed `%12` as an escaped
-/// `U+0012` control character rather than the literal pane id, and the server received a
-/// session id that named no pane, not a 401. Pane ids `%0` through `%9` happened to
-/// survive by accident (`%3` re-encodes to `%253`, which decodes back to `%3`), so the
-/// failure stayed invisible until a long-lived tmux server's pane count passed nine.
-/// `CharacterSet.urlQueryAllowed` and `.urlPathAllowed` are not sufficient replacements:
-/// both permit characters (`&`, `=`, `/`) that are structural in a single query value or
-/// path segment, so `urlSafe(_:)` restricts encoding to RFC 3986's unreserved set.
+/// `U+0012` control character rather than the literal pane id, and the server's query
+/// decoder (`URI.queryParameters`, which calls `percentDecode()` on every value) turned
+/// it into that same control byte again, so the server received a session id that named
+/// no pane, not a 401. Pane ids `%0` through `%9` happened to survive by accident (`%3`
+/// re-encodes to `%253`, which decodes back to `%3`), so the failure stayed invisible
+/// until a long-lived tmux server's pane count passed nine.
+///
+/// `sessionId` in `restart(sessionId:)` and `close(sessionId:)` is deliberately left
+/// unencoded, unlike `attach`'s query value, because those two put `sessionId` in a
+/// *path* segment, and the server's router (`Trie+resolve.swift`'s `.capture` case)
+/// stores the raw path component verbatim with no decoding step; `percentDecode()` is
+/// called nowhere in that path. Encoding it here with no matching decode on the other
+/// end would turn `%12` into `%2512` on the wire and permanently break the match, since
+/// the server compares the parameter against the pane id byte for byte. This is safe
+/// only because tmux pane ids are always `%` followed by digits, never `/`, so nothing
+/// in a path segment there can inject a spurious segment; if `sessionId`'s shape ever
+/// gains a character that is unsafe in a path, `restart`/`close` need a coordinated fix
+/// on the server (which would then need to decode `:sid` itself) in the same change.
+///
+/// `CharacterSet.urlQueryAllowed` is not a sufficient replacement for `queryEncoded(_:)`:
+/// it permits `&` and `=`, which would let a value inject another query item, so
+/// `queryEncoded(_:)` restricts encoding to RFC 3986's unreserved set instead.
 public struct RemoteEndpoints: Equatable, Sendable {
     private let host: String
     private let port: Int
@@ -41,10 +56,10 @@ public struct RemoteEndpoints: Equatable, Sendable {
     private var httpBase: String { "http://\(host):\(port)" }
     private var wsBase: String { "ws://\(host):\(port)" }
 
-    public var control: URL? { URL(string: "\(wsBase)/control?token=\(Self.urlSafe(token))") }
+    public var control: URL? { URL(string: "\(wsBase)/control?token=\(Self.queryEncoded(token))") }
 
     public func attach(sessionId: String) -> URL? {
-        URL(string: "\(wsBase)/attach?session=\(Self.urlSafe(sessionId))&token=\(Self.urlSafe(token))")
+        URL(string: "\(wsBase)/attach?session=\(Self.queryEncoded(sessionId))&token=\(Self.queryEncoded(token))")
     }
 
     public var workspaces: URL? { api("api/workspaces") }
@@ -57,28 +72,30 @@ public struct RemoteEndpoints: Equatable, Sendable {
         api("api/workspaces/\(workspaceId.uuidString)/claude")
     }
 
+    // sessionId is interpolated raw here, not through `queryEncoded(_:)`: see the type's
+    // doc comment for why a path segment must not be encoded without a matching decode
+    // step on the server.
     public func restart(sessionId: String) -> URL? {
-        api("api/sessions/\(Self.urlSafe(sessionId))/restart")
+        api("api/sessions/\(sessionId)/restart")
     }
 
     public func close(sessionId: String) -> URL? {
-        api("api/sessions/\(Self.urlSafe(sessionId))/close")
+        api("api/sessions/\(sessionId)/close")
     }
 
     private func api(_ path: String) -> URL? {
-        URL(string: "\(httpBase)/\(path)?token=\(Self.urlSafe(token))")
+        URL(string: "\(httpBase)/\(path)?token=\(Self.queryEncoded(token))")
     }
 
-    /// Percent-encodes a raw value for safe interpolation into a single path segment or
-    /// query value. Restricted to RFC 3986's unreserved characters (letters, digits,
-    /// `-`, `.`, `_`, `~`) rather than `CharacterSet.urlQueryAllowed`/`.urlPathAllowed`,
-    /// because those two are scoped to an entire query or path, not one value inside it:
-    /// `urlQueryAllowed` permits `&` and `=`, which would let a value inject another
-    /// query item, and `urlPathAllowed` permits `/`, which would let a value inject
-    /// another path segment. `addingPercentEncoding` only returns nil for encodings a
-    /// `String` cannot represent, which does not happen here, but the fallback keeps
-    /// this helper total rather than trapping on an unreachable case.
-    private static func urlSafe(_ value: String) -> String {
+    /// Percent-encodes a raw value for safe interpolation into a single query value.
+    /// Restricted to RFC 3986's unreserved characters (letters, digits, `-`, `.`, `_`,
+    /// `~`) rather than `CharacterSet.urlQueryAllowed`, because `urlQueryAllowed` is
+    /// scoped to an entire query, not one value inside it, and permits `&` and `=`,
+    /// which would let a value inject another query item. `addingPercentEncoding` only
+    /// returns nil for encodings a `String` cannot represent, which does not happen
+    /// here, but the fallback keeps this helper total rather than trapping on an
+    /// unreachable case.
+    private static func queryEncoded(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: unreservedURLCharacters) ?? value
     }
 
