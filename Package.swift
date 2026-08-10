@@ -2,13 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "itermplex-shared",
+    name: "wietty-shared",
     platforms: [.iOS(.v16), .macOS(.v14)],
     products: [
-        .library(name: "ItermplexShared", targets: ["ItermplexShared"])
+        .library(name: "WiettyShared", targets: ["WiettyShared"])
     ],
     targets: [
-        .target(name: "ItermplexShared"),
-        .testTarget(name: "ItermplexSharedTests", dependencies: ["ItermplexShared"])
+        .target(name: "WiettyShared"),
+        .testTarget(name: "WiettySharedTests", dependencies: ["WiettyShared"])
     ]
 )

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ItermplexShared
+@testable import WiettyShared
 
 @Suite struct RemoteSnapshotDecoderTests {
     /// Builds snapshot JSON text from a dictionary, so tests read like the wire

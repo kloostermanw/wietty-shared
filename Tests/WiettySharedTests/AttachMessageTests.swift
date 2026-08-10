@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ItermplexShared
+@testable import WiettyShared
 
 @Suite struct AttachMessageTests {
     @Test func parsesResize() {

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ItermplexShared
+@testable import WiettyShared
 
 /// Deliberately not covered here: `start()`, `stop()`, and the socket receive loop.
 /// `RemoteTerminalConnection` has no injection seam over `URLSessionWebSocketTask` by
