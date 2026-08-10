@@ -17,7 +17,7 @@ public protocol SecretStore {
 /// so `SecItemAdd` fails with `errSecMissingEntitlement` and every write silently does
 /// nothing.
 public struct KeychainSecretStore: SecretStore {
-    private let service = "eu.kloosterman.itermplex.remote"
+    private let service = "eu.kloosterman.wietty.remote"
 
     public init() {}
 

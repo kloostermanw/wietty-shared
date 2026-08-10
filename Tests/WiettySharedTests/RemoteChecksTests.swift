@@ -1,5 +1,5 @@
 import Testing
-@testable import ItermplexShared
+@testable import WiettyShared
 
 @Suite struct RemoteChecksTests {
     private func checks(passing: Int = 0, failing: Int = 0, cancelled: Int = 0,

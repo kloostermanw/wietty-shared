@@ -1,5 +1,5 @@
 import Foundation
-import ItermplexShared
+import WiettyShared
 
 /// Dictionary backed `SecretStore` so tests never touch the real Keychain.
 final class InMemorySecretStore: SecretStore {

@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ItermplexShared
+@testable import WiettyShared
 
 @MainActor
 @Suite struct RemoteWorkspaceStoreTests {

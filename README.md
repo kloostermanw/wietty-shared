@@ -1,6 +1,6 @@
-# itermplex-shared
+# wietty-shared
 
-The platform neutral client for [iTermPlex](https://github.com/kloostermanw/itermplex)'s LAN
+The platform neutral client for [Wietty](https://github.com/kloostermanw/wietty)'s LAN
 remote protocol. Shared by the macOS app (which both serves and consumes the protocol) and the
 iPadOS client.
 

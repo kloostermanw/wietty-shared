@@ -31,7 +31,7 @@ public final class RemoteConnectionsStore: ObservableObject {
     @Published public private(set) var connections: [RemoteConnection]
     private let defaults: UserDefaults
     private let secretStore: SecretStore
-    private let key = "itermplex.remote.connections"
+    private let key = "wietty.remote.connections"
 
     public init(defaults: UserDefaults = .standard, secretStore: SecretStore = KeychainSecretStore()) {
         self.defaults = defaults
