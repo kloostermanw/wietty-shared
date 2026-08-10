@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ItermplexShared
+@testable import WiettyShared
 
 @MainActor
 @Suite struct RemoteConnectionsStoreTests {
@@ -33,7 +33,7 @@ import Foundation
         let store = RemoteConnectionsStore(defaults: defaults, secretStore: InMemorySecretStore())
         store.add(RemoteConnection(id: UUID(), name: "B", host: "1.2.3.4", port: 7434, token: "s3cret"))
 
-        let raw = defaults.data(forKey: "itermplex.remote.connections")!
+        let raw = defaults.data(forKey: "wietty.remote.connections")!
         let text = String(data: raw, encoding: .utf8)!
         #expect(!text.contains("s3cret"))
     }
