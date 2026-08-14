@@ -29,6 +29,15 @@ import Foundation
                 == "http://192.168.1.20:7434/api/workspaces/1B4E28BA-2FA1-11D2-883F-0016D3CCA427/claude?token=tok")
     }
 
+    /// Keyed by the row's id, not its session id: a row that has never been opened
+    /// carries an empty session id, and that row is exactly the one activation has to
+    /// reach.
+    @Test func activateURLIsKeyedByRowId() {
+        let id = UUID(uuidString: "1B4E28BA-2FA1-11D2-883F-0016D3CCA427")!
+        #expect(endpoints.activate(refId: id)?.absoluteString
+                == "http://192.168.1.20:7434/api/terminals/1B4E28BA-2FA1-11D2-883F-0016D3CCA427/activate?token=tok")
+    }
+
     @Test func sessionActionURLs() {
         #expect(endpoints.restart(sessionId: "s1")?.absoluteString
                 == "http://192.168.1.20:7434/api/sessions/s1/restart?token=tok")

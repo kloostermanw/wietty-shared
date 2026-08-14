@@ -72,6 +72,18 @@ public struct RemoteEndpoints: Equatable, Sendable {
         api("api/workspaces/\(workspaceId.uuidString)/claude")
     }
 
+    /// Makes sure the row with this id has a live session on the serving instance,
+    /// opening one when it has none, and answers with the row's terminal JSON.
+    ///
+    /// Keyed by the row's id rather than its session id, unlike `restart` and `close`.
+    /// A row that has never been opened carries an empty session id, and a row whose
+    /// serving instance was relaunched carries one that names nothing, so a session id
+    /// cannot address the rows this route exists for. A row id is a UUID, so unlike
+    /// `restart`/`close`'s pane ids it needs no thought about path safety.
+    public func activate(refId: UUID) -> URL? {
+        api("api/terminals/\(refId.uuidString)/activate")
+    }
+
     // sessionId is interpolated raw here, not through `queryEncoded(_:)`: see the type's
     // doc comment for why a path segment must not be encoded without a matching decode
     // step on the server.

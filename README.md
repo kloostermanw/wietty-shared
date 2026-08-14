@@ -48,6 +48,12 @@ A few things are easy to get wrong because nothing in the type system enforces t
 - Call `RemoteWorkspacesController.sync()` once at launch and again after every add, edit, or
   remove of a connection. Nothing enforces this, and a missed call fails silently: a newly added
   connection's section never appears, or an edited connection keeps talking to its old address.
+- Attach to the session id `activate(refId:)` returns, not to the one the row already carried.
+  A row whose serving instance has no live session for it (never opened, or relaunched since)
+  gets a new session, and the id it had before is the dead one. Every other action on the store
+  is fire and forget because the next snapshot reconciles it a few hundred milliseconds later;
+  a click cannot wait that long without attaching to the wrong session, which is why this one
+  is `async` and answers.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an

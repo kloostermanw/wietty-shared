@@ -161,6 +161,48 @@ public final class RemoteWorkspaceStore: ObservableObject {
     public func restart(sessionId: String) { post(endpoints.restart(sessionId: sessionId)) }
     public func close(sessionId: String) { post(endpoints.close(sessionId: sessionId)) }
 
+    /// Makes sure a row has a live session on the serving instance and answers with the
+    /// session id to attach to, or nil when the round trip failed (the reason lands in
+    /// `lastActionError`, as it does for the fire and forget actions above).
+    ///
+    /// This one waits for its reply, unlike its neighbours, because the answer is the
+    /// point: reviving a row gives it a *new* session id, and a caller that attached to
+    /// the id it already held would attach to the session that just died. The next
+    /// pushed snapshot carries the new id too, but it arrives a few hundred
+    /// milliseconds after the click, which is long enough to attach to the wrong thing.
+    public func activate(refId: UUID) async -> String? {
+        guard let url = endpoints.activate(refId: refId) else {
+            lastActionError = Self.actionErrorMessage(status: nil, hadTransportError: true)
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        // Capped well below `URLSession`'s 60 second default: a caller waits for this
+        // reply before it can show anything, so a serving instance that accepts the
+        // request and then stalls would leave a click looking dead for a minute.
+        request.timeoutInterval = 15
+        let result = try? await URLSession.shared.data(for: request)
+        let status = (result?.1 as? HTTPURLResponse)?.statusCode
+        lastActionError = Self.actionErrorMessage(status: status, hadTransportError: result == nil)
+        guard lastActionError == nil, let data = result?.0 else { return nil }
+        return Self.sessionId(fromTerminal: data)
+    }
+
+    /// The session id in a terminal reply, or nil when the body is not one or names no
+    /// session. Empty counts as no session: a row the server could not open answers
+    /// with the empty id it already had, and attaching to that is the dead pane this
+    /// route exists to avoid.
+    ///
+    /// `nonisolated` and taking `Data` so the decode is testable on its own, with no
+    /// server to answer it.
+    public nonisolated static func sessionId(fromTerminal data: Data) -> String? {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let payload = try? decoder.decode(TerminalPayload.self, from: data),
+              !payload.sessionId.isEmpty else { return nil }
+        return payload.sessionId
+    }
+
     /// Pure mapping from a POST outcome to a short, user facing message. `nil` means the
     /// action succeeded.
     ///
