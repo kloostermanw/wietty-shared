@@ -102,4 +102,32 @@ import Foundation
     @Test func aTransportErrorWinsOverASuccessStatus() {
         #expect(RemoteWorkspaceStore.actionErrorMessage(status: 200, hadTransportError: true) != nil)
     }
+
+    // MARK: - Activation replies
+    //
+    // Activating a row answers with the same terminal object the open and restart
+    // routes answer with. Its `session_id` is the whole point of the round trip: a
+    // revived row gets a new session, and a caller that waited for the next pushed
+    // snapshot instead would attach to the id the row had before it died.
+
+    @Test func anActivationReplyYieldsItsSessionId() {
+        let body = Data(#"{"id":"\#(UUID().uuidString)","session_id":"s7","label":"1","kind":"terminal"}"#.utf8)
+        #expect(RemoteWorkspaceStore.sessionId(fromTerminal: body) == "s7")
+    }
+
+    @Test func anActivationReplyWithNoSessionIdYieldsNil() {
+        #expect(RemoteWorkspaceStore.sessionId(fromTerminal: Data(#"{"label":"1"}"#.utf8)) == nil)
+    }
+
+    /// An empty session id is a row the server could not open, not a session to
+    /// attach to, so it is refused here rather than sent to `attach` where it
+    /// would produce the very `[session ended]` this route exists to prevent.
+    @Test func anActivationReplyWithAnEmptySessionIdYieldsNil() {
+        let body = Data(#"{"id":"\#(UUID().uuidString)","session_id":"","label":"1"}"#.utf8)
+        #expect(RemoteWorkspaceStore.sessionId(fromTerminal: body) == nil)
+    }
+
+    @Test func garbageInAnActivationReplyYieldsNil() {
+        #expect(RemoteWorkspaceStore.sessionId(fromTerminal: Data("not json".utf8)) == nil)
+    }
 }
