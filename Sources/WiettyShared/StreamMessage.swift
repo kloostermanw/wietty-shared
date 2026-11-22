@@ -3,6 +3,9 @@ import Foundation
 /// The version of the terminal stream protocol this package speaks.
 public enum StreamProtocol {
     public static let version = 2
+    /// The largest message the protocol carries, on either transport. A snapshot is one
+    /// message, about 11 MB at 100,000 lines of history, so this is well above that.
+    public static let maxMessageSize = 64 << 20
 }
 
 /// What a viewer wants after the grid changes.

@@ -131,7 +131,7 @@ public struct StreamFrameReader: Sendable {
     private let maxPayload: Int
     private var failure: StreamFrameError?
 
-    public init(maxPayload: Int = 64 << 20) {
+    public init(maxPayload: Int = StreamProtocol.maxMessageSize) {
         self.maxPayload = maxPayload
     }
 
