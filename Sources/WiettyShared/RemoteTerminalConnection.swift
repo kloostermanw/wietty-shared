@@ -5,8 +5,9 @@ import Foundation
 /// Every callback runs on the main actor. Snapshot, repaint and data bytes all reach
 /// `onData`: a snapshot starts with a hard reset and a repaint redraws the visible
 /// screen, so a terminal that is simply fed them in order ends up right. See
-/// `TerminalStreamConnection` for the handshake, the end reasons, and why `onEnded` fires
-/// at most once per `start()` and never after `stop()`.
+/// `TerminalStreamConnection` for the handshake and the end reasons. `onEnded` fires at
+/// most once per `start()`. Because `stop()` runs on the main actor, which is this
+/// stream's callback queue, nothing at all is delivered after `stop()` returns.
 @MainActor
 public final class RemoteTerminalConnection {
     /// Internal so the tests can feed frames without a live server.

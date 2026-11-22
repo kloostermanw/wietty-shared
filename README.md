@@ -60,9 +60,16 @@ A few things are easy to get wrong because nothing in the type system enforces t
   this client and needs updating; `refused` carries the server's own code and message, worth
   showing as is. Reconnecting can help only after `connectionLost`; after `sessionEnded`,
   `serverTooOld` or `refused` it cannot.
-- `onEnded` fires at most once per `start()`, and never because you called `stop()`. Set the
-  callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
-  without a lock, and that queue must be serial for messages to keep their order.
+- `onEnded` fires at most once per `start()`, and never because you called `stop()`. Calling
+  `start()` again before a queued `onEnded` was delivered drops that `onEnded`, so reconnect from
+  `onEnded`, not blindly.
+- After `stop()` returns, nothing is delivered if `stop()` was called on the callback queue (from
+  a callback, or on the main actor for `RemoteTerminalConnection`). Called from any other thread,
+  at most one callback that was already about to run may still run.
+- Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
+  without a lock. Any callback queue works, a concurrent one included, because the connection
+  wraps it in a serial queue of its own. Messages always arrive in order and one at a time.
+- `send` and `claim` are dropped until the server's hello has been accepted, and after an end.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an
