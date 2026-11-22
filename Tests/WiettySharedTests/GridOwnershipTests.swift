@@ -47,4 +47,17 @@ struct GridOwnershipTests {
         ownership.claimSent()
         #expect(ownership.isOwner)
     }
+
+    /// The server answers every claim with one own resize, and a value is one connection's.
+    @Test func anotherViewersClaimBetweenMyAnswersDoesNotCostOwnershipEarly() {
+        var ownership = GridOwnership()
+        ownership.claimSent(); ownership.claimSent()
+        ownership.resizeReceived(own: true)
+        ownership.resizeReceived(own: false)
+        #expect(ownership.isOwner)
+        ownership.resizeReceived(own: true)
+        #expect(ownership.isOwner)
+        ownership.resizeReceived(own: false)
+        #expect(ownership.isOwner == false)
+    }
 }

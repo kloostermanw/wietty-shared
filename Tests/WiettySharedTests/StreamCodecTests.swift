@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import WiettyShared
 
@@ -73,5 +74,102 @@ struct StreamCodecTests {
     @Test func aResizeWithoutOwnReadsAsNotOwn() {
         #expect(StreamCodec.message(from: .text(#"{"type":"resize","cols":80,"rows":24}"#))
                 == .resize(cols: 80, rows: 24, own: false))
+    }
+
+    // MARK: Fix round 1
+
+    static func paddedHello(totalBytes: Int) -> [UInt8] {
+        let base = Array(#"{"type":"hello","protocol":2,"session":""}"#.utf8)
+        return Array(#"{"type":"hello","protocol":2,"session":""#.utf8)
+            + [UInt8](repeating: 0x61, count: totalBytes - base.count) + Array(#""}"#.utf8)
+    }
+
+    @Test func literalJSONDecodes() {
+        #expect(StreamCodec.message(from: .text(#"{"type":"hello","protocol":2,"session":"gt:abc","resize":"reflow"}"#))
+                == .hello(protocolVersion: 2, session: "gt:abc", resize: .reflow))
+        #expect(StreamCodec.message(from: .text(#"{"type":"error","code":"protocol","message":"x"}"#))
+                == .error(code: "protocol", message: "x"))
+    }
+
+    @Test func literalJSONEncodes() throws {
+        func object(_ message: StreamMessage) throws -> [String: Any] {
+            guard case .text(let text) = StreamCodec.webSocketFrame(for: message) else {
+                Issue.record("expected text"); return [:]
+            }
+            return try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        }
+        let hello = try object(.hello(protocolVersion: 2, session: "gt:abc", resize: .reflow))
+        #expect(hello.count == 4)
+        #expect(hello["type"] as? String == "hello")
+        #expect(hello["protocol"] as? Int == 2)
+        #expect(hello["session"] as? String == "gt:abc")
+        #expect(hello["resize"] as? String == "reflow")
+        let error = try object(.error(code: "protocol", message: "x"))
+        #expect(error.count == 3)
+        #expect(error["type"] as? String == "error")
+        #expect(error["code"] as? String == "protocol")
+        #expect(error["message"] as? String == "x")
+    }
+
+    @Test func aJSONSocketFrameHasExactBytes() {
+        let payload = Array(#"{"type":"ended"}"#.utf8)
+        #expect(StreamCodec.socketFrame(for: .ended) == [0, 0, 0, UInt8(payload.count + 1), 0x01] + payload)
+    }
+
+    @Test func readerBoundaries() throws {
+        var zero = StreamFrameReader()
+        #expect(throws: StreamFrameError.malformedFrame) { _ = try zero.append([0, 0, 0, 0]) }
+        var huge = StreamFrameReader()
+        #expect(throws: StreamFrameError.frameTooLarge) { _ = try huge.append([0xFF, 0xFF, 0xFF, 0xFF]) }
+
+        var exact = StreamFrameReader(maxPayload: 16)
+        let body = [UInt8](repeating: 7, count: 16)
+        #expect(try exact.append(StreamCodec.socketFrame(for: .data(body))) == [.data(body)])
+        var over = StreamFrameReader(maxPayload: 16)
+        #expect(throws: StreamFrameError.frameTooLarge) {
+            _ = try over.append(StreamCodec.socketFrame(for: .data(body + [7])))
+        }
+
+        var empty = StreamFrameReader()
+        #expect(try empty.append([0, 0, 0, 1, 0x01]) == [])
+        #expect(StreamCodec.message(from: .text("[]")) == nil)
+        #expect(StreamCodec.message(from: .text("5")) == nil)
+        #expect(StreamCodec.message(from: .text(#"{"type":5}"#)) == nil)
+    }
+
+    @Test func aBadFrameDoesNotSwallowTheGoodOnesBeforeItAndLatches() throws {
+        var reader = StreamFrameReader()
+        let good = StreamCodec.socketFrame(for: .data([1, 2]))
+        #expect(try reader.append(good + [0, 0, 0, 0]) == [.data([1, 2])])
+        #expect(throws: StreamFrameError.malformedFrame) { _ = try reader.append([]) }
+        #expect(throws: StreamFrameError.malformedFrame) { _ = try reader.append(good) }
+    }
+
+    @Test func aJSONPayloadIsCappedAt64KiB() throws {
+        let max = StreamCodec.maxJSONPayload
+        #expect(max == 65_536)
+        let big = Self.paddedHello(totalBytes: max + 1)
+        let ok = Self.paddedHello(totalBytes: max)
+        #expect(StreamCodec.message(from: .text(String(decoding: big, as: UTF8.self))) == nil)
+        #expect(StreamCodec.message(from: .text(String(decoding: ok, as: UTF8.self))) != nil)
+        func frame(_ payload: [UInt8]) -> [UInt8] {
+            let n = UInt32(payload.count + 1)
+            return [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF), 0x01] + payload
+        }
+        var r1 = StreamFrameReader()
+        #expect(try r1.append(frame(big)) == [])
+        var r2 = StreamFrameReader()
+        #expect(try r2.append(frame(ok)).count == 1)
+    }
+
+    @Test func resizeIsRangeChecked() {
+        func decode(_ c: Int, _ r: Int) -> StreamMessage? {
+            StreamCodec.message(from: .text(#"{"type":"resize","cols":\#(c),"rows":\#(r)}"#))
+        }
+        #expect(decode(0, 10) == nil)
+        #expect(decode(-5, 10) == nil)
+        #expect(decode(10, 10_001) == nil)
+        #expect(decode(1, 1) == .resize(cols: 1, rows: 1, own: false))
+        #expect(decode(10_000, 10_000) == .resize(cols: 10_000, rows: 10_000, own: false))
     }
 }
