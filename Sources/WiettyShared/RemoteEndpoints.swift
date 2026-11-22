@@ -58,8 +58,14 @@ public struct RemoteEndpoints: Equatable, Sendable {
 
     public var control: URL? { URL(string: "\(wsBase)/control?token=\(Self.queryEncoded(token))") }
 
-    public func attach(sessionId: String) -> URL? {
-        URL(string: "\(wsBase)/attach?session=\(Self.queryEncoded(sessionId))&token=\(Self.queryEncoded(token))")
+    /// One session's terminal stream, in protocol version `StreamProtocol.version`. The
+    /// version and the resize mode are appended after the token, so the part of the URL a
+    /// version 1 server matched on is unchanged. A server that finds no `protocol` here
+    /// takes the client for a version 1 one.
+    public func attach(sessionId: String, resize: ResizeMode) -> URL? {
+        URL(string: "\(wsBase)/attach?session=\(Self.queryEncoded(sessionId))"
+            + "&token=\(Self.queryEncoded(token))"
+            + "&protocol=\(StreamProtocol.version)&resize=\(resize.rawValue)")
     }
 
     public var workspaces: URL? { api("api/workspaces") }
