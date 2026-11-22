@@ -244,6 +244,15 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
     private var _sent: [URLSessionWebSocketTask.Message] = []
     private var _resumed = false
     private var _cancelled = false
+    private var _maximumMessageSize = 1 << 20   // URLSession's default
+    private var _sizeWhenResumed: Int?
+
+    var maximumMessageSize: Int {
+        get { lock.withLock { _maximumMessageSize } }
+        set { lock.withLock { _maximumMessageSize = newValue } }
+    }
+    /// What `maximumMessageSize` was when `resume()` was called, or nil before then.
+    var sizeWhenResumed: Int? { lock.withLock { _sizeWhenResumed } }
 
     var pendingReceives: Int { lock.withLock { receives.count } }
     var resumed: Bool { lock.withLock { _resumed } }
@@ -268,7 +277,12 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
         }
     }
 
-    func resume() { lock.withLock { _resumed = true } }
+    func resume() {
+        lock.withLock {
+            _resumed = true
+            _sizeWhenResumed = _maximumMessageSize
+        }
+    }
 
     func receive(completionHandler: @escaping ReceiveHandler) {
         lock.withLock { receives.append(completionHandler) }
@@ -365,6 +379,30 @@ struct TerminalStreamSocketLoopTests {
         #expect(socket.pendingReceives == 1)
         c.start()
         #expect(factory.made.count == 1)
+    }
+
+    /// A snapshot is one message, and with real history it is larger than URLSession's
+    /// default limit of 1 MiB. The socket must be told before it opens.
+    @Test func theSocketAcceptsTheProtocolsLargestMessageBeforeItOpens() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        #expect(socket.sizeWhenResumed == StreamProtocol.maxMessageSize)
+    }
+
+    /// The production socket is the one the public initializer makes: a real
+    /// `URLSessionWebSocketTask`, inspected here without being resumed, so nothing connects.
+    /// Setting the limit through `WebSocketTransport`, as `start()` does, must reach the
+    /// task's own property and not stop at some default of the protocol.
+    @Test func theLimitReachesTheRealSocket() throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:1/attach"))
+        let transport = TerminalStreamConnection.urlSessionTransport(url)
+        defer { transport.cancel(with: .goingAway, reason: nil) }
+        let task = try #require(transport as? URLSessionWebSocketTask)
+        #expect(task.state == .suspended)
+        #expect(task.maximumMessageSize == 1 << 20)   // URLSession's default, too small
+        transport.maximumMessageSize = StreamProtocol.maxMessageSize
+        #expect(task.maximumMessageSize == StreamProtocol.maxMessageSize)
     }
 
     @Test func stringAndDataMapToTextAndBinaryFrames() throws {

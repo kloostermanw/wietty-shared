@@ -17,6 +17,9 @@ public enum TerminalEndReason: Equatable, Sendable {
 /// only one in production; the tests hand in a fake so the receive loop can be driven
 /// without a server.
 protocol WebSocketTransport: AnyObject, Sendable {
+    /// The largest incoming message the socket accepts. URLSession's default is 1 MiB,
+    /// which a snapshot with real history exceeds.
+    var maximumMessageSize: Int { get set }
     func resume()
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, any Error>) -> Void)
     func send(_ message: URLSessionWebSocketTask.Message,
@@ -111,7 +114,12 @@ public final class TerminalStreamConnection: @unchecked Sendable {
                             callbackQueue: DispatchQueue) {
         self.init(connection: connection, sessionId: sessionId, resize: resize,
                   callbackQueue: callbackQueue,
-                  transport: { URLSession.shared.webSocketTask(with: $0) })
+                  transport: Self.urlSessionTransport)
+    }
+
+    /// The socket the public initializer makes. Internal so a test can inspect one.
+    static func urlSessionTransport(_ url: URL) -> any WebSocketTransport {
+        URLSession.shared.webSocketTask(with: url)
     }
 
     /// Internal: `transport` makes the socket for a URL, so the tests can hand in a fake.
@@ -168,6 +176,10 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         }
         socket = task
         lock.unlock()
+        // A snapshot is one message and can be far above URLSession's default of 1 MiB,
+        // which would drop the connection on attach. This must be set before the socket
+        // opens.
+        task.maximumMessageSize = StreamProtocol.maxMessageSize
         task.resume()
         receive(on: task)
     }

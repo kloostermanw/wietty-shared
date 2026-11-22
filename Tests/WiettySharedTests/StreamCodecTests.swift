@@ -116,6 +116,25 @@ struct StreamCodecTests {
         #expect(StreamCodec.socketFrame(for: .ended) == [0, 0, 0, UInt8(payload.count + 1), 0x01] + payload)
     }
 
+    /// The reader's default is the protocol's largest message, the same limit the
+    /// WebSocket transport is given. Only the length fields are fed, so nothing of that
+    /// size is allocated: a frame of exactly the limit is merely incomplete, one byte more
+    /// is refused.
+    @Test func theReadersDefaultIsTheProtocolsLargestMessage() throws {
+        #expect(StreamProtocol.maxMessageSize == 64 << 20)
+        func header(payload: Int) -> [UInt8] {
+            let length = UInt32(payload + 1)
+            return [UInt8(length >> 24), UInt8((length >> 16) & 0xFF),
+                    UInt8((length >> 8) & 0xFF), UInt8(length & 0xFF), 0x03]
+        }
+        var atLimit = StreamFrameReader()
+        #expect(try atLimit.append(header(payload: StreamProtocol.maxMessageSize)) == [])
+        var overLimit = StreamFrameReader()
+        #expect(throws: StreamFrameError.frameTooLarge) {
+            _ = try overLimit.append(header(payload: StreamProtocol.maxMessageSize + 1))
+        }
+    }
+
     @Test func readerBoundaries() throws {
         var zero = StreamFrameReader()
         #expect(throws: StreamFrameError.malformedFrame) { _ = try zero.append([0, 0, 0, 0]) }

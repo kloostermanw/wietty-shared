@@ -14,7 +14,7 @@ iPadOS client.
 | `RemoteWorkspaceStore` | One instance's live state: the `/control` socket, plus REST actions |
 | `RemoteWorkspacesController` | Maps saved connections to live stores |
 | `StreamMessage`, `StreamCodec`, `StreamFrameReader` | The terminal stream's messages (protocol version 2) and their WebSocket and Unix socket framings |
-| `TerminalStreamConnection` | One session's `/attach` stream, in both directions, bound to no actor |
+| `TerminalStreamConnection` | One session's `/attach` stream, in both directions, bound to no actor. Accepts messages up to `StreamProtocol.maxMessageSize` (64 MiB) |
 | `RemoteTerminalConnection` | The same stream for a terminal view on the main actor, in repaint mode |
 | `RemoteConnection`, `RemoteConnectionsStore`, `SecretStore` | Saved connections, with tokens in the Keychain |
 
@@ -66,6 +66,10 @@ A few things are easy to get wrong because nothing in the type system enforces t
 - After `stop()` returns, nothing is delivered if `stop()` was called on the callback queue (from
   a callback, or on the main actor for `RemoteTerminalConnection`). Called from any other thread,
   at most one callback that was already about to run may still run.
+- A snapshot arrives as one message, and with real history it is larger than URLSession's
+  default limit of 1 MiB (about 11 MB at 100,000 lines). `TerminalStreamConnection` raises its
+  socket's limit to `StreamProtocol.maxMessageSize`, 64 MiB, the same limit `StreamFrameReader`
+  applies on the Unix socket. Anything else that opens an `/attach` socket must do the same.
 - Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
   without a lock. Any callback queue works, a concurrent one included, because the connection
   wraps it in a serial queue of its own. Messages always arrive in order and one at a time.
