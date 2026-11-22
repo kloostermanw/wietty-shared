@@ -69,7 +69,11 @@ A few things are easy to get wrong because nothing in the type system enforces t
 - Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
   without a lock. Any callback queue works, a concurrent one included, because the connection
   wraps it in a serial queue of its own. Messages always arrive in order and one at a time.
-- `send` and `claim` are dropped until the server's hello has been accepted, and after an end.
+- Input typed after `start()` and before the server's hello has been accepted is held, not lost:
+  up to 64 KiB in order (the oldest bytes go first beyond that), and of the claims only the
+  latest. When the hello is accepted the held claim and then the held input are written, before
+  anything sent later. If the stream ends instead, they are discarded. Before `start()` and after
+  an end, `send` and `claim` write and hold nothing.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an

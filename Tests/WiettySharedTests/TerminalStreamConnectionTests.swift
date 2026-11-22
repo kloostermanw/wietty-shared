@@ -229,8 +229,9 @@ final class ConcurrencyGate: @unchecked Sendable {
     func leave() { lock.withLock { inside -= 1 } }
 }
 
-/// A socket the test drives by hand. Receives are parked until the test completes them;
-/// sends are recorded and, when `deferSends` is set, parked too.
+/// A socket the test drives by hand. Receives and send completions are both parked
+/// until the test fires them, as URLSession, which always calls back later and on a queue
+/// of its own, never from inside the call.
 final class FakeTransport: WebSocketTransport, @unchecked Sendable {
     typealias ReceiveHandler = @Sendable (Result<URLSessionWebSocketTask.Message, any Error>) -> Void
     typealias SendHandler = @Sendable ((any Error)?) -> Void
@@ -243,8 +244,6 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
     private var _sent: [URLSessionWebSocketTask.Message] = []
     private var _resumed = false
     private var _cancelled = false
-    var sendError: (any Error)?
-    var deferSends = false
 
     var pendingReceives: Int { lock.withLock { receives.count } }
     var resumed: Bool { lock.withLock { _resumed } }
@@ -259,6 +258,15 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
             }
         }
     }
+    /// What was sent, decoded.
+    var sentMessages: [StreamMessage?] { sent.map(StreamCodec.message(from:)) }
+    /// The bytes of every data message sent, joined.
+    var sentInput: [UInt8] {
+        sentMessages.flatMap { message -> [UInt8] in
+            if case .data(let bytes) = message { return bytes }
+            return []
+        }
+    }
 
     func resume() { lock.withLock { _resumed = true } }
 
@@ -267,12 +275,10 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
     }
 
     func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping SendHandler) {
-        let (deferred, error): (Bool, (any Error)?) = lock.withLock {
+        lock.withLock {
             _sent.append(message)
-            if deferSends { sendCompletions.append(completionHandler) }
-            return (deferSends, sendError)
+            sendCompletions.append(completionHandler)
         }
-        if !deferred { completionHandler(error) }
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
@@ -334,6 +340,23 @@ struct TerminalStreamSocketLoopTests {
         return (connection, queue, recorder, factory)
     }
 
+    /// Starts, stops and starts again, and hands back both sockets. The old one still has
+    /// its receive parked, which is what a stale completion arrives through.
+    private func restarted(_ c: TerminalStreamConnection, _ factory: Factory,
+                           beforeStop: (FakeTransport) -> Void = { _ in }) throws
+        -> (old: FakeTransport, new: FakeTransport) {
+        c.start()
+        let old = try #require(factory.made.first)
+        beforeStop(old)
+        c.stop()
+        c.start()
+        let new = try #require(factory.made.last)
+        #expect(old !== new)
+        #expect(old.cancelled)
+        #expect(old.pendingReceives == 1)
+        return (old, new)
+    }
+
     @Test func startResumesTheSocketAndWaitsForAFrame() throws {
         let (c, _, _, factory) = connection()
         c.start()
@@ -356,19 +379,15 @@ struct TerminalStreamSocketLoopTests {
         #expect(socket.pendingReceives == 1)
     }
 
-    @Test func aStaleSocketDeliversNothingAndStopsLooping() throws {
+    // MARK: The stale socket guard. Each of these fails with the `task === socket` check
+    // taken out of `process` and `end`.
+
+    @Test func aStaleDataFrameIsNotDeliveredIntoTheNewSession() throws {
         let (c, queue, recorder, factory) = connection()
-        c.start()
-        c.stop()
-        c.start()
-        let old = try #require(factory.made.first)
-        let new = try #require(factory.made.last)
-        #expect(old !== new)
-        #expect(old.cancelled)
-        old.deliver(hello)
-        old.complete(.failure(FakeTransport.Failure()))
-        #expect(old.pendingReceives == 0)
+        let (old, new) = try restarted(c, factory)
         new.deliver(hello)
+        old.deliver(.data([9]))
+        #expect(old.pendingReceives == 0)
         new.deliver(.data([1]))
         queue.sync {}
         #expect(recorder.messages == [.data([1])])
@@ -376,15 +395,53 @@ struct TerminalStreamSocketLoopTests {
         #expect(new.pendingReceives == 1)
     }
 
+    @Test func aStaleHelloDoesNotAnswerForTheNewSocket() throws {
+        let (c, queue, recorder, factory) = connection()
+        let (old, new) = try restarted(c, factory)
+        old.deliver(hello)
+        new.deliver(.data([1]))
+        queue.sync {}
+        #expect(recorder.ends == [.serverTooOld])
+        #expect(recorder.messages.isEmpty)
+    }
+
+    @Test func aStaleFailureDoesNotEndTheNewSession() throws {
+        let (c, queue, recorder, factory) = connection()
+        let (old, new) = try restarted(c, factory)
+        new.deliver(hello)
+        old.complete(.failure(FakeTransport.Failure()))
+        new.deliver(.data([1]))
+        queue.sync {}
+        #expect(recorder.ends.isEmpty)
+        #expect(recorder.messages == [.data([1])])
+    }
+
+    @Test func aStaleSendFailureDoesNotEndTheNewSession() throws {
+        let (c, queue, recorder, factory) = connection()
+        let (old, new) = try restarted(c, factory) { old in
+            old.deliver(hello)
+            c.send([1])
+        }
+        #expect(old.sent.count == 1)
+        new.deliver(hello)
+        old.completeSends(with: FakeTransport.Failure())
+        new.deliver(.data([2]))
+        queue.sync {}
+        #expect(recorder.ends.isEmpty)
+        #expect(recorder.messages == [.data([2])])
+    }
+
+    // MARK: Ends
+
     @Test func aFailureEndsAsConnectionLostOnce() throws {
         let (c, queue, recorder, factory) = connection()
         c.start()
         let socket = try #require(factory.made.first)
         socket.deliver(hello)
+        c.send([1])                                            // parked, to fail later
         socket.complete(.failure(FakeTransport.Failure()))
         #expect(socket.pendingReceives == 0)
-        socket.complete(.failure(FakeTransport.Failure()))
-        c.send([1])
+        socket.completeSends(with: FakeTransport.Failure())   // a second failing completion
         queue.sync {}
         #expect(recorder.ends == [.connectionLost])
         #expect(socket.cancelled)
@@ -396,7 +453,6 @@ struct TerminalStreamSocketLoopTests {
         let (c, queue, recorder, factory) = connection()
         c.start()
         let socket = try #require(factory.made.first)
-        socket.deferSends = true
         socket.deliver(hello)
         c.send([1])
         socket.deliver(.ended)
@@ -405,6 +461,37 @@ struct TerminalStreamSocketLoopTests {
         queue.sync {}
         #expect(recorder.ends == [.sessionEnded])
     }
+
+    @Test func aFailedSendEndsAsConnectionLostOnce() throws {
+        let (c, queue, recorder, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        c.send([1])
+        c.send([2])
+        socket.completeSends(with: FakeTransport.Failure())   // both fail
+        queue.sync {}
+        #expect(recorder.ends == [.connectionLost])
+        #expect(socket.cancelled)
+        // The cancelled socket's parked receive then fails as well. That is the same end.
+        socket.complete(.failure(FakeTransport.Failure()))
+        queue.sync {}
+        #expect(recorder.ends == [.connectionLost])
+    }
+
+    @Test func aSendThatFailsAfterStopEndsNothing() throws {
+        let (c, queue, recorder, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        c.send([1])
+        c.stop()
+        socket.completeSends(with: FakeTransport.Failure())
+        queue.sync {}
+        #expect(recorder.ends.isEmpty)
+    }
+
+    // MARK: Writes
 
     @Test func sendWritesABinaryDataFrameAndClaimATextResize() throws {
         let (c, _, _, factory) = connection()
@@ -421,16 +508,78 @@ struct TerminalStreamSocketLoopTests {
         #expect(socket.sent.last.flatMap(StreamCodec.message(from:)) == .resize(cols: 100, rows: 30, own: false))
     }
 
-    @Test func nothingIsWrittenBeforeTheHelloIsAccepted() throws {
+    /// Typing before the server has answered is not lost: it is written, after the claim,
+    /// the moment the hello is accepted, and before anything sent later.
+    @Test func inputAndAClaimBeforeTheHelloAreWrittenWhenItArrives() throws {
         let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        c.send([1, 2])
+        c.claim(cols: 80, rows: 24)
+        c.send([3])
+        #expect(socket.sent.isEmpty)
+        socket.deliver(hello)
+        c.send([4])
+        #expect(socket.sentMessages.first == .resize(cols: 80, rows: 24, own: false))
+        #expect(socket.sentMessages.dropFirst().allSatisfy {
+            if case .data = $0 { return true } else { return false }
+        })
+        #expect(socket.sentInput == [1, 2, 3, 4])
+        #expect(socket.sentMessages.last == .data([4]))
+    }
+
+    @Test func onlyTheLatestClaimBeforeTheHelloIsWritten() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        c.claim(cols: 80, rows: 24)
+        c.claim(cols: 132, rows: 50)
+        socket.deliver(hello)
+        #expect(socket.sentMessages == [.resize(cols: 132, rows: 50, own: false)])
+    }
+
+    @Test func heldInputKeepsTheNewestBytesWithinTheLimit() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        let limit = TerminalStreamConnection.maxHeldInput
+        let first = (0..<limit).map { UInt8($0 % 251) }
+        let second: [UInt8] = Array(repeating: 0xEE, count: 100)
+        c.send(first)
+        c.send(second)
+        socket.deliver(hello)
+        #expect(socket.sentInput == Array(first.dropFirst(100)) + second)
+        #expect(socket.sentInput.count == limit)
+    }
+
+    @Test func heldInputIsDiscardedWhenTheFirstMessageIsNotAHello() throws {
+        let (c, queue, recorder, factory) = connection()
         c.start()
         let socket = try #require(factory.made.first)
         c.send([1])
         c.claim(cols: 80, rows: 24)
+        socket.deliver(.data([9]))
+        queue.sync {}
+        #expect(recorder.ends == [.serverTooOld])
         #expect(socket.sent.isEmpty)
+    }
+
+    @Test func heldInputIsDiscardedByStop() throws {
+        let (c, _, _, factory) = connection()
+        let (old, new) = try restarted(c, factory) { _ in c.send([1]) }
+        new.deliver(hello)
+        #expect(old.sent.isEmpty)
+        #expect(new.sent.isEmpty)
+    }
+
+    @Test func nothingIsHeldOrWrittenBeforeStart() throws {
+        let (c, _, _, factory) = connection()
+        c.send([1])
+        c.claim(cols: 80, rows: 24)
+        c.start()
+        let socket = try #require(factory.made.first)
         socket.deliver(hello)
-        c.send([2])
-        #expect(socket.sent == [.binary([0x02, 2])])
+        #expect(socket.sent.isEmpty)
     }
 
     @Test func nothingIsWrittenAfterAnEnd() throws {
@@ -442,35 +591,5 @@ struct TerminalStreamSocketLoopTests {
         c.send([1])
         c.claim(cols: 80, rows: 24)
         #expect(socket.sent.isEmpty)
-    }
-
-    @Test func aFailedSendEndsAsConnectionLostOnce() throws {
-        let (c, queue, recorder, factory) = connection()
-        c.start()
-        let socket = try #require(factory.made.first)
-        socket.deliver(hello)
-        socket.sendError = FakeTransport.Failure()
-        c.send([1])
-        queue.sync {}
-        #expect(recorder.ends == [.connectionLost])
-        #expect(socket.cancelled)
-        // The cancelled socket's parked receive then fails as well. That is the same end.
-        c.send([2])
-        socket.complete(.failure(FakeTransport.Failure()))
-        queue.sync {}
-        #expect(recorder.ends == [.connectionLost])
-    }
-
-    @Test func aSendThatFailsAfterStopEndsNothing() throws {
-        let (c, queue, recorder, factory) = connection()
-        c.start()
-        let socket = try #require(factory.made.first)
-        socket.deferSends = true
-        socket.deliver(hello)
-        c.send([1])
-        c.stop()
-        socket.completeSends(with: FakeTransport.Failure())
-        queue.sync {}
-        #expect(recorder.ends.isEmpty)
     }
 }
