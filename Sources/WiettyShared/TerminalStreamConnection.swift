@@ -46,8 +46,14 @@ extension URLSessionWebSocketTask: WebSocketTransport {}
 /// delivered through `onMessage`: they end the stream, through `onEnded`, as `.refused`
 /// and `.sessionEnded`.
 ///
-/// `send` and `claim` write nothing until the server's hello has been accepted, and
-/// nothing after the stream has ended or been stopped. They are dropped, not queued.
+/// Input and claims made after `start()` and before the server's hello has been accepted
+/// are held, not lost. Input is kept in order up to `maxHeldInput` bytes in total, beyond
+/// which the oldest held bytes are discarded first; of the claims only the latest is kept.
+/// When the hello is accepted, under the same lock that lets later writes through, the
+/// held claim and then the held input are written, so nothing sent later can overtake
+/// them. If the stream ends instead (too old, refused, lost, or `stop()`), what was held
+/// is discarded. Before `start()` and after an end, `send` and `claim` write nothing and
+/// hold nothing.
 ///
 /// `onEnded` fires at most once per `start()`, and never because the owner called
 /// `stop()`. A failed send ends the stream as `.connectionLost`, through the same single
@@ -73,6 +79,10 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         case finished
     }
 
+    /// The most input held while the server's hello is awaited. Beyond it the oldest held
+    /// bytes are discarded first.
+    static let maxHeldInput = 65_536
+
     private let endpoints: RemoteEndpoints
     private let sessionId: String
     private let resize: ResizeMode
@@ -83,6 +93,11 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     // Guarded by `lock`.
     private var socket: (any WebSocketTransport)?
     private var phase = Phase.awaitingHello
+    /// True from `start()` until the stream ends or is stopped: writes made while the
+    /// hello is awaited are held only then.
+    private var started = false
+    private var heldInput: [UInt8] = []
+    private var heldClaim: (cols: Int, rows: Int)?
     /// Bumped by every `start()` and `stop()`. A delivery carries the generation it was
     /// decided in and is dropped if that is no longer current.
     private var generation: UInt64 = 0
@@ -131,13 +146,26 @@ public final class TerminalStreamConnection: @unchecked Sendable {
             return
         }
         generation &+= 1
+        let mine = generation
         phase = .awaitingHello
+        started = true
+        discardHeld()
         guard let url = endpoints.attach(sessionId: sessionId, resize: resize) else {
             lock.unlock()
             end(.connectionLost, from: nil)
             return
         }
+        lock.unlock()
+        // The socket is made outside the lock: the factory is not this type's code. A
+        // `stop()` or another `start()` in the meantime has bumped the generation, and
+        // then this socket is not the one wanted.
         let task = makeTransport(url)
+        lock.lock()
+        guard generation == mine, socket == nil else {
+            lock.unlock()
+            task.cancel(with: .goingAway, reason: nil)
+            return
+        }
         socket = task
         lock.unlock()
         task.resume()
@@ -152,29 +180,50 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         lock.lock()
         generation &+= 1
         phase = .finished
+        started = false
+        discardHeld()
         let task = socket
         socket = nil
         lock.unlock()
         task?.cancel(with: .goingAway, reason: nil)
     }
 
-    /// Input for the remote terminal, byte exact. Dropped before the server's hello and
-    /// after an end.
+    /// Input for the remote terminal, byte exact. Held while the server's hello is awaited
+    /// (see the type's doc comment); dropped before `start()` and after an end.
     public func send(_ bytes: [UInt8]) {
         write(.data(bytes))
     }
 
     /// Claims the grid at this size. `own` means nothing upstream and is sent as false.
-    /// Dropped before the server's hello and after an end.
+    /// While the server's hello is awaited only the latest claim is held; dropped before
+    /// `start()` and after an end.
     public func claim(cols: Int, rows: Int) {
         write(.resize(cols: cols, rows: rows, own: false))
     }
 
     private func write(_ message: StreamMessage) {
-        let current: (any WebSocketTransport)? = lock.withLock {
-            phase == .streaming ? socket : nil
+        lock.lock()
+        defer { lock.unlock() }
+        switch (phase, message) {
+        case (.streaming, _):
+            if let socket { sendLocked(message, on: socket) }
+        case (.awaitingHello, .data(let bytes)) where started:
+            heldInput += bytes
+            if heldInput.count > Self.maxHeldInput {
+                heldInput.removeFirst(heldInput.count - Self.maxHeldInput)
+            }
+        case (.awaitingHello, .resize(let cols, let rows, _)) where started:
+            heldClaim = (cols, rows)
+        default:
+            break
         }
-        guard let task = current else { return }
+    }
+
+    /// Writes with the lock held, so writes reach the socket in the order they took the
+    /// lock and the held ones cannot be overtaken. This relies on the transport calling
+    /// `completionHandler` later and never from inside `send`, as URLSession does: the
+    /// handler can take the lock to end the stream.
+    private func sendLocked(_ message: StreamMessage, on task: any WebSocketTransport) {
         let frame: URLSessionWebSocketTask.Message
         switch StreamCodec.webSocketFrame(for: message) {
         case .text(let text): frame = .string(text)
@@ -221,6 +270,13 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         switch (phase, message) {
         case (.awaitingHello, .hello(let version, _, _)) where version == StreamProtocol.version:
             phase = .streaming
+            if let socket {
+                if let claim = heldClaim {
+                    sendLocked(.resize(cols: claim.cols, rows: claim.rows, own: false), on: socket)
+                }
+                if !heldInput.isEmpty { sendLocked(.data(heldInput), on: socket) }
+            }
+            discardHeld()
             lock.unlock()
         case (.awaitingHello, .hello(let version, _, _)) where version > StreamProtocol.version:
             lock.unlock()
@@ -253,12 +309,20 @@ public final class TerminalStreamConnection: @unchecked Sendable {
             return
         }
         phase = .finished
+        started = false
+        discardHeld()
         let closing = socket
         socket = nil
         let current = generation
         lock.unlock()
         closing?.cancel(with: .goingAway, reason: nil)
         deliver(in: current) { $0.onEnded?(reason) }
+    }
+
+    /// With the lock held.
+    private func discardHeld() {
+        heldInput = []
+        heldClaim = nil
     }
 
     /// Queues `body` on `callbackQueue`, to run only if no `start()` or `stop()` has come
