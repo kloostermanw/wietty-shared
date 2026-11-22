@@ -13,7 +13,9 @@ iPadOS client.
 | `RemoteEndpoints` | Every URL one remote instance exposes |
 | `RemoteWorkspaceStore` | One instance's live state: the `/control` socket, plus REST actions |
 | `RemoteWorkspacesController` | Maps saved connections to live stores |
-| `RemoteTerminalConnection`, `AttachMessage` | One session's `/attach` stream, in both directions |
+| `StreamMessage`, `StreamCodec`, `StreamFrameReader` | The terminal stream's messages (protocol version 2) and their WebSocket and Unix socket framings |
+| `TerminalStreamConnection` | One session's `/attach` stream, in both directions, bound to no actor |
+| `RemoteTerminalConnection` | The same stream for a terminal view on the main actor, in repaint mode |
 | `RemoteConnection`, `RemoteConnectionsStore`, `SecretStore` | Saved connections, with tokens in the Keychain |
 
 The protocol itself is documented in the macOS repo, at `documentation/remote-access.md`.
@@ -54,6 +56,13 @@ A few things are easy to get wrong because nothing in the type system enforces t
   is fire and forget because the next snapshot reconciles it a few hundred milliseconds later;
   a click cannot wait that long without attaching to the wrong session, which is why this one
   is `async` and answers.
+- Handle every `TerminalEndReason`. `serverTooOld` means the Mac speaks an older protocol than
+  this client and needs updating; `refused` carries the server's own code and message, worth
+  showing as is. Reconnecting can help only after `connectionLost`; after `sessionEnded`,
+  `serverTooOld` or `refused` it cannot.
+- `onEnded` fires at most once per `start()`, and never because you called `stop()`. Set the
+  callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
+  without a lock, and that queue must be serial for messages to keep their order.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an

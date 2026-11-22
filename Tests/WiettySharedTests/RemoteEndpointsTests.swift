@@ -11,9 +11,11 @@ import Foundation
         #expect(endpoints.control?.absoluteString == "ws://192.168.1.20:7434/control?token=tok")
     }
 
-    @Test func attachSocketURL() {
-        #expect(endpoints.attach(sessionId: "s1")?.absoluteString
-                == "ws://192.168.1.20:7434/attach?session=s1&token=tok")
+    @Test func theAttachURLCarriesVersionAndMode() {
+        #expect(endpoints.attach(sessionId: "s1", resize: .repaint)?.absoluteString
+                == "ws://192.168.1.20:7434/attach?session=s1&token=tok&protocol=2&resize=repaint")
+        #expect(endpoints.attach(sessionId: "s1", resize: .reflow)?.absoluteString
+                == "ws://192.168.1.20:7434/attach?session=s1&token=tok&protocol=2&resize=reflow")
     }
 
     @Test func workspacesURL() {
@@ -63,14 +65,16 @@ import Foundation
     // `restart`/`close` need the opposite treatment; see the test below for why.
 
     @Test func paneIdWithDoubleDigitsSurvivesRoundTrip() {
-        let url = endpoints.attach(sessionId: "%12")
-        #expect(url?.absoluteString == "ws://192.168.1.20:7434/attach?session=%2512&token=tok")
+        let url = endpoints.attach(sessionId: "%12", resize: .repaint)
+        #expect(url?.absoluteString
+                == "ws://192.168.1.20:7434/attach?session=%2512&token=tok&protocol=2&resize=repaint")
         #expect(decodedQueryValue(url, name: "session") == "%12")
     }
 
     @Test func paneIdWithSingleDigitSurvivesRoundTrip() {
-        let url = endpoints.attach(sessionId: "%3")
-        #expect(url?.absoluteString == "ws://192.168.1.20:7434/attach?session=%253&token=tok")
+        let url = endpoints.attach(sessionId: "%3", resize: .repaint)
+        #expect(url?.absoluteString
+                == "ws://192.168.1.20:7434/attach?session=%253&token=tok&protocol=2&resize=repaint")
         #expect(decodedQueryValue(url, name: "session") == "%3")
     }
 
