@@ -299,9 +299,18 @@ final class FakeTransport: WebSocketTransport, @unchecked Sendable {
         lock.withLock { _cancelled = true }
     }
 
-    /// Completes the oldest parked receive, as URLSession would.
+    /// Completes the oldest parked receive, as URLSession would. The connection asks for
+    /// the next frame from its callback queue, after the previous one was delivered, so
+    /// this waits a short while for a receive to be parked. With none parked by then it
+    /// does nothing, as before.
     func complete(_ result: Result<URLSessionWebSocketTask.Message, any Error>) {
-        let handler: ReceiveHandler? = lock.withLock { receives.isEmpty ? nil : receives.removeFirst() }
+        let deadline = Date().addingTimeInterval(1)
+        var handler: ReceiveHandler?
+        while true {
+            handler = lock.withLock { receives.isEmpty ? nil : receives.removeFirst() }
+            if handler != nil || Date() >= deadline { break }
+            Thread.sleep(forTimeInterval: 0.001)
+        }
         handler?(result)
     }
 
@@ -458,6 +467,7 @@ struct TerminalStreamSocketLoopTests {
         let (c, queue, recorder, factory) = connection()
         let (old, new) = try restarted(c, factory) { old in
             old.deliver(hello)
+            queue.sync {}                       // the next receive is parked before the stop
             c.send([1])
         }
         #expect(old.sent.count == 1)
@@ -467,6 +477,86 @@ struct TerminalStreamSocketLoopTests {
         queue.sync {}
         #expect(recorder.ends.isEmpty)
         #expect(recorder.messages == [.data([2])])
+    }
+
+    // MARK: Reading only as fast as the consumer
+    //
+    // The next frame is asked for only after the current one has been delivered, so a slow
+    // consumer holds back the socket and the server's own bound can engage. Blocking the
+    // callback queue inside `onMessage` stands in for a terminal view parsing on the main
+    // thread.
+
+    /// Blocks `onMessage` until released, and tells the test when a delivery is inside it.
+    final class Gate: @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        func pass() {
+            entered.signal()
+            release.wait()
+        }
+    }
+
+    @Test func noSecondReceiveIsRequestedWhileADeliveryIsRunning() throws {
+        let (c, queue, recorder, factory) = connection()
+        let gate = Gate()
+        c.onMessage = { message in
+            recorder.message(message)
+            gate.pass()
+        }
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        queue.sync {}
+        #expect(socket.pendingReceives == 1)
+        socket.deliver(.data([1]))
+        #expect(gate.entered.wait(timeout: .now() + 5) == .success)
+        // The consumer is still inside the delivery: the socket must not be read.
+        #expect(socket.pendingReceives == 0)
+        Thread.sleep(forTimeInterval: 0.05)
+        #expect(socket.pendingReceives == 0)
+        gate.release.signal()
+        queue.sync {}
+        #expect(socket.pendingReceives == 1)
+        #expect(recorder.messages == [.data([1])])
+    }
+
+    @Test func aHelloRearmsTheReceive() throws {
+        let (c, queue, recorder, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        queue.sync {}
+        #expect(socket.pendingReceives == 1)
+        #expect(recorder.messages.isEmpty)
+    }
+
+    @Test func aSkippedFrameRearmsTheReceive() throws {
+        let (c, queue, recorder, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        socket.complete(.success(.string(#"{"type":"something-newer"}"#)))
+        queue.sync {}
+        #expect(socket.pendingReceives == 1)
+        #expect(recorder.messages.isEmpty)
+    }
+
+    @Test func nothingRearmsAfterStop() throws {
+        let (c, queue, recorder, factory) = connection()
+        let gate = Gate()
+        c.onMessage = { message in
+            recorder.message(message)
+            gate.pass()
+        }
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        socket.deliver(.data([1]))
+        #expect(gate.entered.wait(timeout: .now() + 5) == .success)
+        c.stop()
+        gate.release.signal()
+        queue.sync {}
+        #expect(socket.pendingReceives == 0)
     }
 
     // MARK: Ends
@@ -505,6 +595,7 @@ struct TerminalStreamSocketLoopTests {
         c.start()
         let socket = try #require(factory.made.first)
         socket.deliver(hello)
+        queue.sync {}                                          // the next receive is parked
         c.send([1])
         c.send([2])
         socket.completeSends(with: FakeTransport.Failure())   // both fail

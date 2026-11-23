@@ -76,7 +76,10 @@ extension URLSessionWebSocketTask: WebSocketTransport {}
 /// The receive loop is bound to the socket instance it was started for (`task ===
 /// socket`, checked under the lock together with the state it changes), so a `stop()`
 /// followed quickly by a new `start()` can never let a stale loop deliver into the new
-/// stream or keep looping after teardown. The socket sits behind `WebSocketTransport`,
+/// stream or keep looping after teardown. One frame is read at a time: the next is asked
+/// for on the callback queue, after the current one has been delivered, so a consumer that
+/// is slower than the network slows the reading down rather than letting messages pile up
+/// on the callback queue. The socket sits behind `WebSocketTransport`,
 /// so the tests drive that loop with a fake; only `URLSessionWebSocketTask` itself is
 /// left to a live server.
 public final class TerminalStreamConnection: @unchecked Sendable {
@@ -283,7 +286,14 @@ public final class TerminalStreamConnection: @unchecked Sendable {
                 case .data(let data): self.process(.binary(Array(data)), from: task)
                 @unknown default: break   // a kind of frame this client cannot read: skipped
                 }
-                if self.lock.withLock({ task === self.socket }) {
+                // The next frame is asked for only once this one has been delivered: the
+                // re-arm is queued behind the delivery on the serial callback queue. A
+                // consumer slower than the network then holds back the socket, so the
+                // backlog stays on the server, where it is bounded, instead of growing
+                // here. A frame that delivers nothing (the hello, a skipped one) re-arms
+                // the same way, behind whatever is still queued.
+                self.callbackQueue.async { [weak self] in
+                    guard let self, self.lock.withLock({ task === self.socket }) else { return }
                     self.receive(on: task)
                 }
             case .failure:
