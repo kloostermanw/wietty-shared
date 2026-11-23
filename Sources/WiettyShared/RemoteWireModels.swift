@@ -12,7 +12,7 @@ import Foundation
 // rename on either side fails a test instead of silently breaking the client.
 //
 // Fields the server includes only conditionally (`git`, `checks`, `base_ahead`,
-// `base_behind`, `issue_*`, `pr_*`, `job_name`) are optional here, so a snapshot that
+// `base_behind`, `uncommitted`, `issue_*`, `pr_*`, `job_name`) are optional here, so a snapshot that
 // omits them still decodes. Fields required to identify an element (`id` and `name` on
 // a workspace, `id`, `session_id` and `label` on a terminal) are not optional: a
 // missing or malformed value throws during decode, and `FailableDecodable` turns that
@@ -47,6 +47,7 @@ struct GitPayload: Decodable {
     var hasUpstream: Bool?
     var baseAhead: Int?
     var baseBehind: Int?
+    var uncommitted: Int?
     var issueNumber: Int?
     var prNumber: Int?
     var issueUrl: String?
