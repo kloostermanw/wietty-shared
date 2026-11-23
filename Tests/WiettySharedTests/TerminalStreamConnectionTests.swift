@@ -566,6 +566,75 @@ struct TerminalStreamSocketLoopTests {
         #expect(socket.sentMessages.last == .data([4]))
     }
 
+    private func dataFrames(_ socket: FakeTransport) -> [[UInt8]] {
+        socket.sentMessages.compactMap { message in
+            if case .data(let bytes) = message { return bytes }
+            return nil
+        }
+    }
+
+    /// The server closes the socket with 1009 on an inbound message over 1 MiB, so a large
+    /// paste goes out in frames of at most 64 KiB.
+    @Test func largeInputIsSplitIntoFramesOfAtMost64KiB() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        let input = (0..<(200 * 1024)).map { UInt8($0 % 251) }
+        c.send(input)
+        let frames = dataFrames(socket)
+        #expect(socket.sentMessages.count == 4)
+        #expect(frames.count == 4)
+        #expect(frames.allSatisfy { $0.count <= 64 * 1024 })
+        #expect(Array(frames.joined()) == input)
+    }
+
+    @Test func exactly64KiBIsOneFrameAndOneMoreByteIsTwo() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        c.send(Array(repeating: 7, count: 64 * 1024))
+        #expect(dataFrames(socket).count == 1)
+        c.send(Array(repeating: 8, count: 64 * 1024 + 1))
+        let frames = dataFrames(socket)
+        #expect(frames.count == 3)
+        #expect(frames[1].count == 64 * 1024)
+        #expect(frames[2] == [8])
+    }
+
+    @Test func heldInputIsFlushedInOrderWithinTheFrameLimit() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        c.send([1, 2])
+        c.claim(cols: 80, rows: 24)
+        c.send(Array(repeating: 9, count: 100 * 1024))
+        socket.deliver(hello)
+        #expect(socket.sentMessages.first == .resize(cols: 80, rows: 24, own: false))
+        let frames = dataFrames(socket)
+        #expect(frames.allSatisfy { $0.count <= 64 * 1024 })
+        let joined = Array(frames.joined())
+        #expect(joined.count == TerminalStreamConnection.maxHeldInput)
+        #expect(joined.suffix(10) == Array(repeating: 9, count: 10))
+    }
+
+    @Test func concurrentLargeSendsDoNotInterleaveTheirFrames() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        socket.deliver(hello)
+        let a = Array(repeating: UInt8(0xAA), count: 300 * 1024)
+        let b = Array(repeating: UInt8(0xBB), count: 300 * 1024)
+        DispatchQueue.concurrentPerform(iterations: 2) { i in c.send(i == 0 ? a : b) }
+        let frames = dataFrames(socket)
+        #expect(frames.count == 10)
+        let tags = frames.map { $0.first }
+        // Each call's five frames are adjacent: the tag changes at most once.
+        #expect(zip(tags, tags.dropFirst()).filter { $0 != $1 }.count == 1)
+        #expect(frames.allSatisfy { Set($0).count == 1 })
+    }
+
     /// The server answers once per claim it receives, and `GridOwnership` counts every
     /// claim made, so no early claim may be folded into another.
     @Test func everyClaimBeforeTheHelloIsWrittenInOrderBeforeTheInput() throws {
