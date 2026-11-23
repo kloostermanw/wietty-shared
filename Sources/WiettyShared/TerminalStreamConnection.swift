@@ -51,9 +51,13 @@ extension URLSessionWebSocketTask: WebSocketTransport {}
 ///
 /// Input and claims made after `start()` and before the server's hello has been accepted
 /// are held, not lost. Input is kept in order up to `maxHeldInput` bytes in total, beyond
-/// which the oldest held bytes are discarded first; of the claims only the latest is kept.
+/// which the oldest held bytes are discarded first. Every claim is kept, in the order
+/// made, and none is folded into another: the server answers each claim it receives once,
+/// and `GridOwnership` counts each claim made, so the two counts must match. At most
+/// `maxHeldClaims` are kept, the oldest discarded first; a caller making more than that
+/// before a hello will over count its unanswered claims, which no real caller does.
 /// When the hello is accepted, under the same lock that lets later writes through, the
-/// held claim and then the held input are written, so nothing sent later can overtake
+/// held claims and then the held input are written, so nothing sent later can overtake
 /// them. If the stream ends instead (too old, refused, lost, or `stop()`), what was held
 /// is discarded. Before `start()` and after an end, `send` and `claim` write nothing and
 /// hold nothing.
@@ -86,6 +90,10 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     /// bytes are discarded first.
     static let maxHeldInput = 65_536
 
+    /// The most claims held while the server's hello is awaited. Beyond it the oldest held
+    /// claim is discarded first.
+    static let maxHeldClaims = 64
+
     private let endpoints: RemoteEndpoints
     private let sessionId: String
     private let resize: ResizeMode
@@ -100,7 +108,7 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     /// hello is awaited are held only then.
     private var started = false
     private var heldInput: [UInt8] = []
-    private var heldClaim: (cols: Int, rows: Int)?
+    private var heldClaims: [(cols: Int, rows: Int)] = []
     /// Bumped by every `start()` and `stop()`. A delivery carries the generation it was
     /// decided in and is dropped if that is no longer current.
     private var generation: UInt64 = 0
@@ -207,8 +215,8 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     }
 
     /// Claims the grid at this size. `own` means nothing upstream and is sent as false.
-    /// While the server's hello is awaited only the latest claim is held; dropped before
-    /// `start()` and after an end.
+    /// While the server's hello is awaited every claim is held, up to `maxHeldClaims`
+    /// (see the type's doc comment); dropped before `start()` and after an end.
     public func claim(cols: Int, rows: Int) {
         write(.resize(cols: cols, rows: rows, own: false))
     }
@@ -225,7 +233,10 @@ public final class TerminalStreamConnection: @unchecked Sendable {
                 heldInput.removeFirst(heldInput.count - Self.maxHeldInput)
             }
         case (.awaitingHello, .resize(let cols, let rows, _)) where started:
-            heldClaim = (cols, rows)
+            heldClaims.append((cols, rows))
+            if heldClaims.count > Self.maxHeldClaims {
+                heldClaims.removeFirst(heldClaims.count - Self.maxHeldClaims)
+            }
         default:
             break
         }
@@ -283,7 +294,7 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         case (.awaitingHello, .hello(let version, _, _)) where version == StreamProtocol.version:
             phase = .streaming
             if let socket {
-                if let claim = heldClaim {
+                for claim in heldClaims {
                     sendLocked(.resize(cols: claim.cols, rows: claim.rows, own: false), on: socket)
                 }
                 if !heldInput.isEmpty { sendLocked(.data(heldInput), on: socket) }
@@ -334,7 +345,7 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     /// With the lock held.
     private func discardHeld() {
         heldInput = []
-        heldClaim = nil
+        heldClaims = []
     }
 
     /// Queues `body` on `callbackQueue`, to run only if no `start()` or `stop()` has come
