@@ -72,7 +72,10 @@ A few things are easy to get wrong because nothing in the type system enforces t
   applies on the Unix socket. Anything else that opens an `/attach` socket must do the same.
 - Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
   without a lock. Any callback queue works, a concurrent one included, because the connection
-  wraps it in a serial queue of its own. Messages always arrive in order and one at a time.
+  wraps it in a serial queue of its own. Messages always arrive in order and one at a time, and the
+  next one is read from the socket only after the callback for the current one has returned. A slow
+  callback therefore holds back the socket, which is what lets the server's bound and resync work.
+  A callback that hands its work to a task and returns at once gives that up.
 - Input typed after `start()` and before the server's hello has been accepted is held, not lost:
   up to 64 KiB in order (the oldest bytes go first beyond that). Every claim is held too, in
   order and never merged, because the server answers each claim once and `GridOwnership` counts

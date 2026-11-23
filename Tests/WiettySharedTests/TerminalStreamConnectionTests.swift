@@ -89,7 +89,7 @@ struct TerminalStreamConnectionTests {
         queue.sync {}
         #expect(recorder.ends == [.refused(
             code: "protocol",
-            message: "This Mac runs a newer Wietty. Update Wietty on this device.")])
+            message: "The Mac serving this terminal runs a newer Wietty. Update Wietty on this device.")])
     }
 
     @Test func aHelloWithALowerVersionMeansTheServerIsTooOld() {
