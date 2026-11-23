@@ -90,10 +90,16 @@ public struct RemoteGit: Equatable, Sendable {
     public var issueURL: URL?
     public var prURL: URL?
     public var checks: RemoteChecks?
+    /// Entries in the working tree's `git status --porcelain`: staged, modified,
+    /// deleted and untracked alike, with an untracked directory counting once. The
+    /// server leaves the key out for a clean tree, and so does an older server
+    /// that does not send it, so both read as 0.
+    public var uncommitted: Int
 
     public init(branch: String, ahead: Int, behind: Int, hasUpstream: Bool,
                 base: RemoteBase? = nil, issueNumber: Int? = nil, prNumber: Int? = nil,
-                issueURL: URL? = nil, prURL: URL? = nil, checks: RemoteChecks? = nil) {
+                issueURL: URL? = nil, prURL: URL? = nil, checks: RemoteChecks? = nil,
+                uncommitted: Int = 0) {
         self.branch = branch
         self.ahead = ahead
         self.behind = behind
@@ -104,6 +110,7 @@ public struct RemoteGit: Equatable, Sendable {
         self.issueURL = issueURL
         self.prURL = prURL
         self.checks = checks
+        self.uncommitted = uncommitted
     }
 }
 

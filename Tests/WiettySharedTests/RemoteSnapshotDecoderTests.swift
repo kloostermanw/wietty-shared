@@ -18,7 +18,7 @@ import Foundation
             "workspaces": [[
                 "id": wsId.uuidString, "name": "demo",
                 "git": ["branch": "main", "ahead": 1, "behind": 0, "has_upstream": true,
-                        "base_ahead": 4, "base_behind": 2,
+                        "base_ahead": 4, "base_behind": 2, "uncommitted": 7,
                         "issue_number": 29, "pr_number": 42,
                         "issue_url": "https://example.test/issues/29",
                         "pr_url": "https://example.test/pull/42",
@@ -53,6 +53,7 @@ import Foundation
         #expect(git.behind == 0)
         #expect(git.hasUpstream)
         #expect(git.base == RemoteBase(ahead: 4, behind: 2))
+        #expect(git.uncommitted == 7)
         #expect(git.issueNumber == 29)
         #expect(git.prNumber == 42)
         #expect(git.issueURL == URL(string: "https://example.test/issues/29"))
@@ -159,6 +160,16 @@ import Foundation
         ]]])
         let workspaces = try #require(RemoteSnapshotDecoder.decode(snapshotText: text))
         #expect(workspaces[0].git?.base == nil)
+    }
+
+    /// A clean tree, or a server from before the count, sends no `uncommitted` key.
+    @Test func aMissingUncommittedCountReadsAsZero() throws {
+        let text = snapshot(["workspaces": [[
+            "id": UUID().uuidString, "name": "demo",
+            "git": ["branch": "main", "ahead": 0, "behind": 0, "has_upstream": false],
+        ]]])
+        let workspaces = try #require(RemoteSnapshotDecoder.decode(snapshotText: text))
+        #expect(workspaces[0].git?.uncommitted == 0)
     }
 
     @Test func aMalformedIssueURLBecomesNilWithoutDroppingTheWorkspace() throws {

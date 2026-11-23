@@ -1,95 +1,63 @@
 import Foundation
 
-/// Why a `RemoteTerminalConnection` stopped.
-public enum TerminalEndReason: Equatable, Sendable {
-    /// The server reported the session is gone. Reconnecting will not bring it back.
-    case sessionEnded
-    /// The socket failed, or no URL could be built. The session may still exist.
-    case connectionLost
-}
-
-/// Bridges one remote session's `WS /attach` stream to a byte feed for a terminal view
-/// and an input sink back to the server.
+/// A `TerminalStreamConnection` for a terminal view on the main actor, in repaint mode.
 ///
-/// The receive loop is bound to the specific socket instance it was started for (via
-/// `task === self.socket`), so a `stop()` followed quickly by a new `start()` can never
-/// let a stale receive loop deliver into the new socket or keep looping after teardown.
+/// Every callback runs on the main actor. Snapshot, repaint and data bytes all reach
+/// `onData`: a snapshot starts with a hard reset and a repaint redraws the visible
+/// screen, so a terminal that is simply fed them in order ends up right. See
+/// `TerminalStreamConnection` for the handshake and the end reasons. `onEnded` fires at
+/// most once per `start()`. Because `stop()` runs on the main actor, which is this
+/// stream's callback queue, nothing at all is delivered after `stop()` returns.
 @MainActor
 public final class RemoteTerminalConnection {
-    private let endpoints: RemoteEndpoints
-    private let sessionId: String
-    private var socket: URLSessionWebSocketTask?
-    private var running = false
+    /// Internal so the tests can feed frames without a live server.
+    let stream: TerminalStreamConnection
 
-    /// Decoded VT bytes to feed the terminal.
+    /// Bytes to feed the terminal, in the order the server sent them.
     public var onData: (([UInt8]) -> Void)?
-    /// The remote grid size, as (cols, rows).
-    public var onResize: ((Int, Int) -> Void)?
-    /// The session ended, or the socket failed, or no URL could be built. Terminal in
-    /// every case, but the reason distinguishes whether reconnecting could plausibly
-    /// help.
+    /// The grid in force, as (cols, rows, own), where `own` says this viewer claimed it.
+    public var onResize: ((Int, Int, Bool) -> Void)?
+    /// The stream stopped for a reason of its own. Not fired by `stop()`.
     public var onEnded: ((TerminalEndReason) -> Void)?
 
     public init(connection: RemoteConnection, sessionId: String) {
-        self.endpoints = RemoteEndpoints(connection)
-        self.sessionId = sessionId
+        stream = TerminalStreamConnection(connection: connection, sessionId: sessionId,
+                                          resize: .repaint, callbackQueue: .main)
+        stream.onMessage = { [weak self] message in
+            MainActor.assumeIsolated { self?.receive(message) }
+        }
+        stream.onEnded = { [weak self] reason in
+            MainActor.assumeIsolated { self?.onEnded?(reason) }
+        }
     }
 
     public func start() {
-        guard !running else { return }
-        guard let url = endpoints.attach(sessionId: sessionId) else {
-            onEnded?(.connectionLost)
-            return
-        }
-        running = true
-        let task = URLSession.shared.webSocketTask(with: url)
-        socket = task
-        task.resume()
-        receive(on: task)
+        stream.start()
     }
 
     public func stop() {
-        running = false
-        socket?.cancel(with: .goingAway, reason: nil)
-        socket = nil
+        stream.stop()
     }
 
     /// Forwards keystroke bytes from the terminal view up to the server.
     public func send(_ bytes: ArraySlice<UInt8>) {
-        guard running, let json = AttachMessage.encodeInput(bytes) else { return }
-        socket?.send(.string(json)) { _ in }
+        stream.send(Array(bytes))
     }
 
-    private func receive(on task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.running, task === self.socket else { return }
-                switch result {
-                case let .success(.string(text)):
-                    self.handle(text)
-                    self.receive(on: task)
-                case .success:
-                    self.receive(on: task)
-                case .failure:
-                    self.stop()
-                    self.onEnded?(.connectionLost)
-                }
-            }
-        }
+    /// Claims the grid at this size.
+    public func claim(cols: Int, rows: Int) {
+        stream.claim(cols: cols, rows: rows)
     }
 
-    /// Internal rather than private so the tests can drive one message at a time
-    /// without a live server.
-    func handle(_ text: String) {
-        switch AttachMessage.parse(text) {
-        case let .resize(cols, rows):
-            onResize?(cols, rows)
-        case let .data(bytes):
+    private func receive(_ message: StreamMessage) {
+        switch message {
+        case let .resize(cols, rows, own):
+            onResize?(cols, rows, own)
+        case let .snapshot(bytes), let .repaint(bytes), let .data(bytes):
             onData?(bytes)
-        case .ended:
-            stop()
-            onEnded?(.sessionEnded)
-        case nil:
+        case .hello, .error, .ended:
+            // Never delivered by the stream: it consumes the hello and turns the other two
+            // into `onEnded`.
             break
         }
     }

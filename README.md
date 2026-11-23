@@ -13,7 +13,9 @@ iPadOS client.
 | `RemoteEndpoints` | Every URL one remote instance exposes |
 | `RemoteWorkspaceStore` | One instance's live state: the `/control` socket, plus REST actions |
 | `RemoteWorkspacesController` | Maps saved connections to live stores |
-| `RemoteTerminalConnection`, `AttachMessage` | One session's `/attach` stream, in both directions |
+| `StreamMessage`, `StreamCodec`, `StreamFrameReader` | The terminal stream's messages (protocol version 2) and their WebSocket and Unix socket framings |
+| `TerminalStreamConnection` | One session's `/attach` stream, in both directions, bound to no actor. Accepts messages up to `StreamProtocol.maxMessageSize` (64 MiB) |
+| `RemoteTerminalConnection` | The same stream for a terminal view on the main actor, in repaint mode |
 | `RemoteConnection`, `RemoteConnectionsStore`, `SecretStore` | Saved connections, with tokens in the Keychain |
 
 The protocol itself is documented in the macOS repo, at `documentation/remote-access.md`.
@@ -54,6 +56,34 @@ A few things are easy to get wrong because nothing in the type system enforces t
   is fire and forget because the next snapshot reconciles it a few hundred milliseconds later;
   a click cannot wait that long without attaching to the wrong session, which is why this one
   is `async` and answers.
+- Handle every `TerminalEndReason`. `serverTooOld` means the Mac speaks an older protocol than
+  this client and needs updating; `refused` carries the server's own code and message, worth
+  showing as is. Reconnecting can help only after `connectionLost`; after `sessionEnded`,
+  `serverTooOld` or `refused` it cannot.
+- `onEnded` fires at most once per `start()`, and never because you called `stop()`. Calling
+  `start()` again before a queued `onEnded` was delivered drops that `onEnded`, so reconnect from
+  `onEnded`, not blindly.
+- After `stop()` returns, nothing is delivered if `stop()` was called on the callback queue (from
+  a callback, or on the main actor for `RemoteTerminalConnection`). Called from any other thread,
+  at most one callback that was already about to run may still run.
+- A snapshot arrives as one message, and with real history it is larger than URLSession's
+  default limit of 1 MiB (about 11 MB at 100,000 lines). `TerminalStreamConnection` raises its
+  socket's limit to `StreamProtocol.maxMessageSize`, 64 MiB, the same limit `StreamFrameReader`
+  applies on the Unix socket. Anything else that opens an `/attach` socket must do the same.
+- Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
+  without a lock. Any callback queue works, a concurrent one included, because the connection
+  wraps it in a serial queue of its own. Messages always arrive in order and one at a time, and the
+  next one is read from the socket only after the callback for the current one has returned. A slow
+  callback therefore holds back the socket, which is what lets the server's bound and resync work.
+  A callback that hands its work to a task and returns at once gives that up.
+- Input typed after `start()` and before the server's hello has been accepted is held, not lost:
+  up to 64 KiB in order (the oldest bytes go first beyond that). Every claim is held too, in
+  order and never merged, because the server answers each claim once and `GridOwnership` counts
+  each claim made; at most 64 are kept, the oldest dropped first, so a caller making more than 64
+  claims before a hello would over count its unanswered claims. When the hello is accepted the
+  held claims and then the held input are written, before anything sent later. If the stream
+  ends instead, they are discarded. Before `start()` and after an end, `send` and `claim` write
+  and hold nothing.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an

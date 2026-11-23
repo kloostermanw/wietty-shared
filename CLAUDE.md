@@ -17,8 +17,9 @@ copied into two clients.
 What belongs here and what does not:
 
 - **Here: the controlling side.** `RemoteWorkspaceStore`, `RemoteWorkspacesController`,
-  `RemoteTerminalConnection`, `AttachMessage`, `RemoteSnapshotDecoder`, `RemoteEndpoints`,
-  `RemoteConnection`, `RemoteConnectionsStore`, `SecretStore`, and the remote models.
+  `TerminalStreamConnection`, `RemoteTerminalConnection`, `StreamMessage`, `StreamCodec`,
+  `RemoteSnapshotDecoder`, `RemoteEndpoints`, `RemoteConnection`, `RemoteConnectionsStore`,
+  `SecretStore`, and the remote models.
 - **Not here: the served side.** `RemoteServer`, `WorkspaceSerializer`, `GhosttyService`,
   `TerminalRelay`, `RawPTY`, `PaneStreamHub` stay in the macOS repo, which is the only instance
   that serves.
@@ -69,7 +70,7 @@ in the same change whenever behavior a consumer depends on changes.
 
 The socket lifecycle is deliberately verified by inspection rather than by test (there is no
 injection seam), so a change to `RemoteWorkspaceStore`'s reconnect logic or
-`RemoteTerminalConnection`'s `task === self.socket` guard needs manual verification against a live
+`TerminalStreamConnection`'s `task === socket` guard needs manual verification against a live
 server, in the macOS app, before publishing.
 
 Never use dashes (— or -) as punctuation in documentation or README files. Rephrase using periods,

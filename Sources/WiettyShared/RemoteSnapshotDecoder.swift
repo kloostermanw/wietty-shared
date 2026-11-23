@@ -55,7 +55,8 @@ public enum RemoteSnapshotDecoder {
             prNumber: payload.prNumber,
             issueURL: payload.issueUrl.flatMap(URL.init(string:)),
             prURL: payload.prUrl.flatMap(URL.init(string:)),
-            checks: payload.checks.map(checks)
+            checks: payload.checks.map(checks),
+            uncommitted: payload.uncommitted ?? 0
         )
     }
 
