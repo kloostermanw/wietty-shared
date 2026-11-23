@@ -90,6 +90,11 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     /// bytes are discarded first.
     static let maxHeldInput = 65_536
 
+    /// The most input bytes one `data` message carries. The server closes the socket with
+    /// 1009 on an inbound message over 1 MiB, so a large paste is split into messages of at
+    /// most this many bytes, sent in order.
+    static let maxInputFrame = 65_536
+
     /// The most claims held while the server's hello is awaited. Beyond it the oldest held
     /// claim is discarded first.
     static let maxHeldClaims = 64
@@ -209,7 +214,9 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     }
 
     /// Input for the remote terminal, byte exact. Held while the server's hello is awaited
-    /// (see the type's doc comment); dropped before `start()` and after an end.
+    /// (see the type's doc comment); dropped before `start()` and after an end. Input over
+    /// `maxInputFrame` bytes goes out as several `data` messages, in order, written under
+    /// one hold of the lock so no other call's frames land between them.
     public func send(_ bytes: [UInt8]) {
         write(.data(bytes))
     }
@@ -247,6 +254,15 @@ public final class TerminalStreamConnection: @unchecked Sendable {
     /// `completionHandler` later and never from inside `send`, as URLSession does: the
     /// handler can take the lock to end the stream.
     private func sendLocked(_ message: StreamMessage, on task: any WebSocketTransport) {
+        if case .data(let bytes) = message, bytes.count > Self.maxInputFrame {
+            var start = 0
+            while start < bytes.count {
+                let end = min(start + Self.maxInputFrame, bytes.count)
+                sendLocked(.data(Array(bytes[start..<end])), on: task)
+                start = end
+            }
+            return
+        }
         let frame: URLSessionWebSocketTask.Message
         switch StreamCodec.webSocketFrame(for: message) {
         case .text(let text): frame = .string(text)
