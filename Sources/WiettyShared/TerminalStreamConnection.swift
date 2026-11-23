@@ -330,7 +330,7 @@ public final class TerminalStreamConnection: @unchecked Sendable {
         case (.awaitingHello, .hello(let version, _, _)) where version > StreamProtocol.version:
             lock.unlock()
             end(.refused(code: "protocol",
-                         message: "This Mac runs a newer Wietty. Update Wietty on this device."),
+                         message: "The Mac serving this terminal runs a newer Wietty. Update Wietty on this device."),
                 from: task)
         case (_, .error(let code, let text)):
             lock.unlock()
