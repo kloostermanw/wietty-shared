@@ -566,14 +566,53 @@ struct TerminalStreamSocketLoopTests {
         #expect(socket.sentMessages.last == .data([4]))
     }
 
-    @Test func onlyTheLatestClaimBeforeTheHelloIsWritten() throws {
+    /// The server answers once per claim it receives, and `GridOwnership` counts every
+    /// claim made, so no early claim may be folded into another.
+    @Test func everyClaimBeforeTheHelloIsWrittenInOrderBeforeTheInput() throws {
         let (c, _, _, factory) = connection()
         c.start()
         let socket = try #require(factory.made.first)
         c.claim(cols: 80, rows: 24)
+        c.send([1])
         c.claim(cols: 132, rows: 50)
         socket.deliver(hello)
-        #expect(socket.sentMessages == [.resize(cols: 132, rows: 50, own: false)])
+        #expect(socket.sentMessages == [
+            .resize(cols: 80, rows: 24, own: false),
+            .resize(cols: 132, rows: 50, own: false),
+            .data([1]),
+        ])
+    }
+
+    @Test func atMostTheLatestHeldClaimsAreKept() throws {
+        let (c, _, _, factory) = connection()
+        c.start()
+        let socket = try #require(factory.made.first)
+        let limit = TerminalStreamConnection.maxHeldClaims
+        #expect(limit == 64)
+        for i in 1...(limit + 1) { c.claim(cols: i, rows: 24) }
+        socket.deliver(hello)
+        #expect(socket.sentMessages == (2...(limit + 1)).map { .resize(cols: $0, rows: 24, own: false) })
+    }
+
+    /// The whole round trip the iPad depends on: a viewer counts two early claims, the
+    /// server answers each claim it received with `own: true`, then another viewer takes
+    /// the grid. The viewer must no longer think it owns it.
+    @Test func earlyClaimsAndTheirAnswersBalanceInGridOwnership() throws {
+        let (c, queue, recorder, factory) = connection()
+        var ownership = GridOwnership()
+        c.start()
+        let socket = try #require(factory.made.first)
+        c.claim(cols: 80, rows: 24); ownership.claimSent()
+        c.claim(cols: 100, rows: 30); ownership.claimSent()
+        socket.deliver(hello)
+        for case let .resize(cols, rows, _)? in socket.sentMessages {
+            socket.deliver(.resize(cols: cols, rows: rows, own: true))
+        }
+        socket.deliver(.resize(cols: 120, rows: 40, own: false))
+        queue.sync {}
+        for case let .resize(_, _, own) in recorder.messages { ownership.resizeReceived(own: own) }
+        #expect(recorder.messages.count == 3)
+        #expect(!ownership.isOwner)
     }
 
     @Test func heldInputKeepsTheNewestBytesWithinTheLimit() throws {

@@ -74,10 +74,13 @@ A few things are easy to get wrong because nothing in the type system enforces t
   without a lock. Any callback queue works, a concurrent one included, because the connection
   wraps it in a serial queue of its own. Messages always arrive in order and one at a time.
 - Input typed after `start()` and before the server's hello has been accepted is held, not lost:
-  up to 64 KiB in order (the oldest bytes go first beyond that), and of the claims only the
-  latest. When the hello is accepted the held claim and then the held input are written, before
-  anything sent later. If the stream ends instead, they are discarded. Before `start()` and after
-  an end, `send` and `claim` write and hold nothing.
+  up to 64 KiB in order (the oldest bytes go first beyond that). Every claim is held too, in
+  order and never merged, because the server answers each claim once and `GridOwnership` counts
+  each claim made; at most 64 are kept, the oldest dropped first, so a caller making more than 64
+  claims before a hello would over count its unanswered claims. When the hello is accepted the
+  held claims and then the held input are written, before anything sent later. If the stream
+  ends instead, they are discarded. Before `start()` and after an end, `send` and `claim` write
+  and hold nothing.
 - Nested `ObservableObject` changes do not propagate. A view that only observes
   `RemoteWorkspacesController` will not redraw when one of its stores changes. Render each
   connection's UI from a subview that observes its own `RemoteWorkspaceStore` as an
