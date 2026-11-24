@@ -191,4 +191,41 @@ struct StreamCodecTests {
         #expect(decode(1, 1) == .resize(cols: 1, rows: 1, own: false))
         #expect(decode(10_000, 10_000) == .resize(cols: 10_000, rows: 10_000, own: false))
     }
+
+    @Test func failureIsSetAtOnceByTheAppendThatMetTheBadFrame() throws {
+        var reader = StreamFrameReader()
+        let good = StreamCodec.socketFrame(for: .data([1, 2]))
+        #expect(reader.failure == nil)
+        #expect(try reader.append(good + [0, 0, 0, 0]) == [.data([1, 2])])
+        #expect(reader.failure == .malformedFrame)
+        var big = StreamFrameReader(maxPayload: 16)
+        #expect(throws: StreamFrameError.frameTooLarge) { _ = try big.append([0, 0, 1, 0, 0x02]) }
+        #expect(big.failure == .frameTooLarge)
+    }
+
+    @Test func failureIsNilOnASoundStreamAndAfterASkippedUnknownType() throws {
+        var reader = StreamFrameReader()
+        let wire = Self.all.flatMap(StreamCodec.socketFrame(for:))
+        _ = try reader.append(wire)
+        #expect(reader.failure == nil)
+        #expect(try reader.append([0, 0, 0, 2, 0x7F, 0x00]) == [])
+        #expect(reader.failure == nil)
+    }
+
+    @Test func aCheckedSocketFrameRefusesOnePayloadByteOverTheLimit() throws {
+        let limit = 16
+        let atLimit = StreamMessage.data([UInt8](repeating: 7, count: limit))
+        #expect(try StreamCodec.checkedSocketFrame(for: atLimit, maxPayload: limit)
+                == StreamCodec.socketFrame(for: atLimit))
+        let over = StreamMessage.data([UInt8](repeating: 7, count: limit + 1))
+        #expect(throws: StreamFrameError.frameTooLarge) {
+            _ = try StreamCodec.checkedSocketFrame(for: over, maxPayload: limit)
+        }
+        #expect(try StreamCodec.checkedSocketFrame(for: .ended) == StreamCodec.socketFrame(for: .ended))
+    }
+
+    @Test func resizeWithZeroRowsOrTooManyColsIsNoMessage() {
+        #expect(StreamCodec.message(from: .text(#"{"type":"resize","cols":10,"rows":0}"#)) == nil)
+        #expect(StreamCodec.message(from: .text(#"{"type":"resize","cols":10001,"rows":10}"#)) == nil)
+    }
 }

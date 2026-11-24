@@ -70,6 +70,11 @@ A few things are easy to get wrong because nothing in the type system enforces t
   default limit of 1 MiB (about 11 MB at 100,000 lines). `TerminalStreamConnection` raises its
   socket's limit to `StreamProtocol.maxMessageSize`, 64 MiB, the same limit `StreamFrameReader`
   applies on the Unix socket. Anything else that opens an `/attach` socket must do the same.
+- `StreamFrameReader.failure` (1.1.0) is set as soon as the append that met a bad frame has
+  returned its earlier messages, so a server need not wait for the next read to learn the stream
+  is broken. It is nil on a sound stream and after a skipped frame of an unknown type.
+  `StreamCodec.checkedSocketFrame(for:maxPayload:)` is `socketFrame(for:)` plus a size check that
+  throws `.frameTooLarge` for a payload the reader would refuse; `socketFrame(for:)` is unchanged.
 - Set the callbacks before `start()`: `TerminalStreamConnection` reads them on its callback queue
   without a lock. Any callback queue works, a concurrent one included, because the connection
   wraps it in a serial queue of its own. Messages always arrive in order and one at a time, and the
