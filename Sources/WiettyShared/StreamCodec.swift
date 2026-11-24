@@ -60,6 +60,16 @@ public enum StreamCodec {
                 UInt8((length >> 8) & 0xFF), UInt8(length & 0xFF), type] + payload
     }
 
+    /// As `socketFrame(for:)`, and throws `.frameTooLarge` for a payload the reader
+    /// on the other side would refuse.
+    public static func checkedSocketFrame(for message: StreamMessage,
+                                          maxPayload: Int = StreamProtocol.maxMessageSize) throws -> [UInt8] {
+        let frame = socketFrame(for: message)
+        // The frame is four length bytes and a type byte, then the payload.
+        guard frame.count - 5 <= maxPayload else { throw StreamFrameError.frameTooLarge }
+        return frame
+    }
+
     // MARK: Shared
 
     static func message(type: UInt8, payload: [UInt8]) -> StreamMessage? {
@@ -125,18 +135,23 @@ public enum StreamCodec {
 ///
 /// An error is final. The call that meets a bad frame returns the messages decoded before
 /// it (or throws at once if there were none), and every later call throws the same error.
-/// The caller must close the connection when `append` throws.
+/// The caller must close the connection when `append` throws. `failure` reports the error
+/// as soon as the append that met it has returned, so a peer that then goes quiet is still seen.
 public struct StreamFrameReader: Sendable {
     private var buffer: [UInt8] = []
     private let maxPayload: Int
-    private var failure: StreamFrameError?
+    private var latched: StreamFrameError?
+
+    /// The error that ended this reader, as soon as the append that met it has
+    /// returned. Nil while the stream is sound.
+    public var failure: StreamFrameError? { latched }
 
     public init(maxPayload: Int = StreamProtocol.maxMessageSize) {
         self.maxPayload = maxPayload
     }
 
     public mutating func append(_ bytes: [UInt8]) throws -> [StreamMessage] {
-        if let failure { throw failure }
+        if let latched { throw latched }
         buffer += bytes
         var messages: [StreamMessage] = []
         var offset = 0
@@ -150,7 +165,7 @@ public struct StreamFrameReader: Sendable {
                 error = .frameTooLarge
             }
             if let error {
-                failure = error
+                latched = error
                 buffer = []
                 if messages.isEmpty { throw error }
                 return messages
