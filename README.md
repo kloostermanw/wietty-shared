@@ -56,6 +56,11 @@ A few things are easy to get wrong because nothing in the type system enforces t
   is fire and forget because the next snapshot reconciles it a few hundred milliseconds later;
   a click cannot wait that long without attaching to the wrong session, which is why this one
   is `async` and answers.
+- `stopSession(sessionId:)` ends a session on the serving instance and keeps its row, where
+  `close(sessionId:)` removes the row as well. It is not `stop()`, which ends this store's own
+  connection. The route (`POST /api/sessions/{sid}/stop`) exists since 1.2.0 of this package and
+  the Wietty that serves it. An older serving instance answers 404, which shows up in
+  `lastActionError` as "Action failed (404).", the same as a session no row carries any more.
 - Handle every `TerminalEndReason`. `serverTooOld` means the Mac speaks an older protocol than
   this client and needs updating; `refused` carries the server's own code and message, worth
   showing as is. Reconnecting can help only after `connectionLost`; after `sessionEnded`,

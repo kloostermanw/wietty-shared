@@ -43,6 +43,8 @@ import Foundation
     @Test func sessionActionURLs() {
         #expect(endpoints.restart(sessionId: "s1")?.absoluteString
                 == "http://192.168.1.20:7434/api/sessions/s1/restart?token=tok")
+        #expect(endpoints.stop(sessionId: "s1")?.absoluteString
+                == "http://192.168.1.20:7434/api/sessions/s1/stop?token=tok")
         #expect(endpoints.close(sessionId: "s1")?.absoluteString
                 == "http://192.168.1.20:7434/api/sessions/s1/close?token=tok")
     }
@@ -62,7 +64,7 @@ import Foundation
     // for `attach`'s query value: the produced URL must carry the pane id doubly-encoded
     // (`%25` + the original digits) so that a single percent-decode on the server, which is
     // what Hummingbird's `URI.queryParameters` does, recovers the exact original string.
-    // `restart`/`close` need the opposite treatment; see the test below for why.
+    // `stop`/`restart`/`close` need the opposite treatment; see the test below for why.
 
     @Test func paneIdWithDoubleDigitsSurvivesRoundTrip() {
         let url = endpoints.attach(sessionId: "%12", resize: .repaint)
@@ -78,15 +80,18 @@ import Foundation
         #expect(decodedQueryValue(url, name: "session") == "%3")
     }
 
-    // `restart`/`close` put sessionId in a *path* segment, not a query value, and the
+    // `stop`/`restart`/`close` put sessionId in a *path* segment, not a query value, and the
     // server's router never percent-decodes path segments (only `URI.queryParameters`
-    // does). So unlike `attach`, these two must interpolate the pane id raw: encoding it
+    // does). So unlike `attach`, these must interpolate the pane id raw: encoding it
     // here with no decode step on the other end would turn `%12` into the literal
     // string `%2512` server-side, which matches no session. This test pins that the pane
     // id survives unencoded, not that it round-trips through a decode.
     @Test func paneIdInSessionActionURLsIsLeftRawForTheUndecodingPathRouter() {
         let restart = endpoints.restart(sessionId: "%12")
         #expect(restart?.absoluteString == "http://192.168.1.20:7434/api/sessions/%12/restart?token=tok")
+
+        let stop = endpoints.stop(sessionId: "%12")
+        #expect(stop?.absoluteString == "http://192.168.1.20:7434/api/sessions/%12/stop?token=tok")
 
         let close = endpoints.close(sessionId: "%12")
         #expect(close?.absoluteString == "http://192.168.1.20:7434/api/sessions/%12/close?token=tok")

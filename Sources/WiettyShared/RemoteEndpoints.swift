@@ -23,8 +23,8 @@ import Foundation
 /// re-encodes to `%253`, which decodes back to `%3`), so the failure stayed invisible
 /// until a long-lived tmux server's pane count passed nine.
 ///
-/// `sessionId` in `restart(sessionId:)` and `close(sessionId:)` is deliberately left
-/// unencoded, unlike `attach`'s query value, because those two put `sessionId` in a
+/// `sessionId` in `stop(sessionId:)`, `restart(sessionId:)` and `close(sessionId:)` is
+/// deliberately left unencoded, unlike `attach`'s query value, because those put `sessionId` in a
 /// *path* segment, and the server's router (`Trie+resolve.swift`'s `.capture` case)
 /// stores the raw path component verbatim with no decoding step; `percentDecode()` is
 /// called nowhere in that path. Encoding it here with no matching decode on the other
@@ -32,7 +32,7 @@ import Foundation
 /// the server compares the parameter against the pane id byte for byte. This is safe
 /// only because tmux pane ids are always `%` followed by digits, never `/`, so nothing
 /// in a path segment there can inject a spurious segment; if `sessionId`'s shape ever
-/// gains a character that is unsafe in a path, `restart`/`close` need a coordinated fix
+/// gains a character that is unsafe in a path, `stop`/`restart`/`close` need a coordinated fix
 /// on the server (which would then need to decode `:sid` itself) in the same change.
 ///
 /// `CharacterSet.urlQueryAllowed` is not a sufficient replacement for `queryEncoded(_:)`:
@@ -95,6 +95,13 @@ public struct RemoteEndpoints: Equatable, Sendable {
     // step on the server.
     public func restart(sessionId: String) -> URL? {
         api("api/sessions/\(sessionId)/restart")
+    }
+
+    /// Ends the session's child and keeps its row, which is what tells it from `close`.
+    /// A serving instance older than this route answers 404, as it does for a session
+    /// no row carries, so a caller cannot tell the two apart from the status.
+    public func stop(sessionId: String) -> URL? {
+        api("api/sessions/\(sessionId)/stop")
     }
 
     public func close(sessionId: String) -> URL? {
