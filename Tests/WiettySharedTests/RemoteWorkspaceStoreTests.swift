@@ -57,6 +57,19 @@ import Foundation
         #expect(s.state == .unreachable)
     }
 
+    /// The one part of a fire and forget action that needs no server: with no URL to
+    /// post to, the failure is recorded at once. It also pins that `stopSession` is an
+    /// action on the other Mac and not `stop()`, which ends this store's connection and
+    /// reports nothing.
+    @Test func stoppingASessionWithNoURLToPostToRecordsAnActionError() {
+        let s = RemoteWorkspaceStore(
+            connection: RemoteConnection(id: UUID(), name: "B", host: "not a host", port: 1, token: "t")
+        )
+        #expect(s.lastActionError == nil)
+        s.stopSession(sessionId: "%12")
+        #expect(s.lastActionError == "Action failed: could not reach the remote.")
+    }
+
     @Test func aPortThatCannotBuildAURLGoesStraightToUnreachable() {
         let s = RemoteWorkspaceStore(
             connection: RemoteConnection(id: UUID(), name: "B", host: "127.0.0.1", port: -1, token: "t")
