@@ -2,7 +2,8 @@
 
 The platform neutral client for [Wietty](https://github.com/kloostermanw/wietty)'s LAN
 remote protocol. Shared by the macOS app (which both serves and consumes the protocol) and the
-iPadOS client.
+iPadOS client. The terminal stream's messages and framings are used by the serving side of the
+macOS app as well, so they are the one definition both ends of a stream speak.
 
 ## What is in here
 
@@ -13,12 +14,13 @@ iPadOS client.
 | `RemoteEndpoints` | Every URL one remote instance exposes |
 | `RemoteWorkspaceStore` | One instance's live state: the `/control` socket, plus REST actions |
 | `RemoteWorkspacesController` | Maps saved connections to live stores |
-| `StreamMessage`, `StreamCodec`, `StreamFrameReader` | The terminal stream's messages (protocol version 2) and their WebSocket and Unix socket framings |
+| `StreamMessage`, `StreamCodec`, `StreamFrameReader` | The terminal stream's messages (protocol version 2) and their WebSocket and Unix socket framings. Used by the server too; the Unix socket framing only between the macOS app's server and its own pane |
 | `TerminalStreamConnection` | One session's `/attach` stream, in both directions, bound to no actor. Accepts messages up to `StreamProtocol.maxMessageSize` (64 MiB) |
-| `RemoteTerminalConnection` | The same stream for a terminal view on the main actor, in repaint mode |
+| `GridOwnership` | Whether this viewer's claim is the grid in force, counted from the claims sent and the resizes received |
+| `RemoteTerminalConnection` | The same stream for a terminal view on the main actor, in repaint mode. The iPadOS client uses it; the macOS app uses `TerminalStreamConnection` directly |
 | `RemoteConnection`, `RemoteConnectionsStore`, `SecretStore` | Saved connections, with tokens in the Keychain |
 
-The protocol itself is documented in the macOS repo, at `documentation/remote-access.md`.
+The protocol itself is documented in the macOS repo, at `docs/remote-access.md`.
 
 ## Requirements
 
