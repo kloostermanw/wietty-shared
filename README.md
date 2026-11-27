@@ -60,8 +60,9 @@ A few things are easy to get wrong because nothing in the type system enforces t
   is `async` and answers.
 - `stopSession(sessionId:)` ends a session on the serving instance and keeps its row, where
   `close(sessionId:)` removes the row as well. It is not `stop()`, which ends this store's own
-  connection. The route (`POST /api/sessions/{sid}/stop`) exists since 1.2.0 of this package and
-  the Wietty that serves it. An older serving instance answers 404, which shows up in
+  connection. The call exists since 1.2.0 of this package. The route it posts to
+  (`POST /api/sessions/{sid}/stop`) is the server's, and exists since the Wietty for macOS that
+  serves it. An older serving instance answers 404, which shows up in
   `lastActionError` as "Action failed (404).", the same as a session no row carries any more.
 - Handle every `TerminalEndReason`. `serverTooOld` means the Mac speaks an older protocol than
   this client and needs updating; `refused` carries the server's own code and message, worth
@@ -74,7 +75,10 @@ A few things are easy to get wrong because nothing in the type system enforces t
   a callback, or on the main actor for `RemoteTerminalConnection`). Called from any other thread,
   at most one callback that was already about to run may still run.
 - A snapshot arrives as one message, and with real history it is larger than URLSession's
-  default limit of 1 MiB (about 11 MB at 100,000 lines). `TerminalStreamConnection` raises its
+  default limit of 1 MiB. Its size depends on the content and on the serving Mac's history
+  setting: at that setting's ceiling of 100,000 lines, ordinary output is some megabytes to
+  about 12 MB, and 34 MB was measured for densely coloured output (the figures are in the macOS
+  repo's `docs/remote-access.md`). `TerminalStreamConnection` raises its
   socket's limit to `StreamProtocol.maxMessageSize`, 64 MiB, the same limit `StreamFrameReader`
   applies on the Unix socket. Anything else that opens an `/attach` socket must do the same.
 - `StreamFrameReader.failure` (1.1.0) is set as soon as the append that met a bad frame has

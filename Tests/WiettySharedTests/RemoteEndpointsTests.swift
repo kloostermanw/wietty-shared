@@ -55,9 +55,11 @@ import Foundation
         #expect(bad.control == nil)
     }
 
-    // MARK: - tmux pane ids
+    // MARK: - Session ids with a percent sign
 
-    // Session ids used to be iTerm2 GUIDs. They are now tmux pane ids like "%12", and "%"
+    // Session ids used to be iTerm2 GUIDs and then, for a time, tmux pane ids like "%12".
+    // Today they are `gt:` plus a UUID, but the pane id stays the value tested here because
+    // it is the hardest one the encoding has had to carry: "%"
     // is the percent-encoding escape character: left raw in a query value, `%12` is parsed
     // by `URL(string:)` as an escaped `U+0012` control character rather than the literal
     // pane id, so the server ends up attaching to no pane at all. These tests pin the fix

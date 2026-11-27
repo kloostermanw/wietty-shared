@@ -14,7 +14,7 @@ import Foundation
 /// 32 lowercase hexadecimal characters, and `sessionId` was an iTerm2 GUID, so neither
 /// needed escaping and a stray character would at worst degrade to a clean 401. That
 /// argument depended on `sessionId` staying GUID-shaped, and stopped being true when the
-/// macOS app migrated session identifiers to tmux pane ids such as `%12`. `%` is the
+/// macOS app, for a time, used tmux pane ids such as `%12` as session identifiers. `%` is the
 /// percent-encoding escape character, so `URL(string:)` parsed `%12` as an escaped
 /// `U+0012` control character rather than the literal pane id, and the server's query
 /// decoder (`URI.queryParameters`, which calls `percentDecode()` on every value) turned
@@ -23,14 +23,21 @@ import Foundation
 /// re-encodes to `%253`, which decodes back to `%3`), so the failure stayed invisible
 /// until a long-lived tmux server's pane count passed nine.
 ///
+/// Neither shape is in use any more: a session id is now `gt:` followed by a lowercase
+/// UUID, minted by the macOS app's own terminal. The encoding stays, because the `:` in
+/// it is not in the unreserved set either (it goes out as `%3A` and the server decodes
+/// it), and because nothing here should depend on the id's shape again.
+///
 /// `sessionId` in `stop(sessionId:)`, `restart(sessionId:)` and `close(sessionId:)` is
 /// deliberately left unencoded, unlike `attach`'s query value, because those put `sessionId` in a
 /// *path* segment, and the server's router (`Trie+resolve.swift`'s `.capture` case)
 /// stores the raw path component verbatim with no decoding step; `percentDecode()` is
 /// called nowhere in that path. Encoding it here with no matching decode on the other
-/// end would turn `%12` into `%2512` on the wire and permanently break the match, since
-/// the server compares the parameter against the pane id byte for byte. This is safe
-/// only because tmux pane ids are always `%` followed by digits, never `/`, so nothing
+/// end would turn `%12` into `%2512` on the wire (and the `:` of today's ids into `%3A`)
+/// and permanently break the match, since the server compares the parameter against the
+/// session id byte for byte. This is safe only because of the id's shape, and the
+/// reasoning that held for tmux pane ids (`%` followed by digits) holds for `gt:` plus a
+/// UUID as well: letters, digits, `-` and one `:`, never `/`, `?` or `#`, so nothing
 /// in a path segment there can inject a spurious segment; if `sessionId`'s shape ever
 /// gains a character that is unsafe in a path, `stop`/`restart`/`close` need a coordinated fix
 /// on the server (which would then need to decode `:sid` itself) in the same change.
