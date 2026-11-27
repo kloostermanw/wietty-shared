@@ -159,6 +159,13 @@ public final class RemoteWorkspaceStore: ObservableObject {
     public func openTerminal(workspaceId: UUID) { post(endpoints.openTerminal(workspaceId: workspaceId)) }
     public func openClaude(workspaceId: UUID) { post(endpoints.openClaude(workspaceId: workspaceId)) }
     public func restart(sessionId: String) { post(endpoints.restart(sessionId: sessionId)) }
+    /// Ends a session on the serving instance and keeps its row, where `close` removes
+    /// the row too. Named for the session because `stop()` is already this store's own:
+    /// it ends the connection, not anything on the other Mac.
+    ///
+    /// A serving instance from before this route answers 404, which lands in
+    /// `lastActionError` as "Action failed (404).".
+    public func stopSession(sessionId: String) { post(endpoints.stop(sessionId: sessionId)) }
     public func close(sessionId: String) { post(endpoints.close(sessionId: sessionId)) }
 
     /// Makes sure a row has a live session on the serving instance and answers with the
