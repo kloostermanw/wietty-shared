@@ -6,7 +6,7 @@ public enum RemoteSessionKind: String, Codable, Sendable {
     case claude
 }
 
-/// One iTerm2 session on a remote instance.
+/// One terminal session on a remote instance.
 public struct RemoteSession: Identifiable, Equatable, Sendable {
     public let id: UUID
     public var sessionId: String

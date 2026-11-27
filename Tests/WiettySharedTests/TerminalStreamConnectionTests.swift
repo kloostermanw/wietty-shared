@@ -6,9 +6,10 @@ import Testing
 /// server. Every connection delivers on its own serial queue, which a test drains with
 /// `queue.sync {}` before it looks at what arrived.
 ///
-/// Not covered here: the receive loop over a live `URLSessionWebSocketTask`, and so the
-/// `task === socket` guard against a stale loop. There is no injection seam over the
-/// socket; see the type's doc comment.
+/// Not covered in this suite: the receive loop and the `task === socket` guard against a
+/// stale loop. `TerminalStreamSocketLoopTests` below covers both, through the
+/// `WebSocketTransport` seam and a `FakeTransport`. Covered nowhere in this package: a
+/// live `URLSessionWebSocketTask`; see the type's doc comment.
 struct TerminalStreamConnectionTests {
     final class Recorder: @unchecked Sendable {
         private let lock = NSLock()
